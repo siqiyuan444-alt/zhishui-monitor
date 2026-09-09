@@ -1,0 +1,17 @@
+# Node.js 前端依赖与构建产物
+frontend/node_modules/
+frontend/dist/
+
+# Python 虚拟环境与缓存
+backend/.venv/
+backend/__pycache__/
+backend/**/*.pyc
+
+# 本地 SQLite 数据库文件
+backend/*.db
+backend/data/*.db
+
+# 环境变量文件
+.env
+frontend/.env
+backend/.env

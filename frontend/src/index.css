@@ -1,0 +1,13 @@
+:root {
+  font-family: "Microsoft YaHei", system-ui, sans-serif;
+  color: #1f2933;
+  background: #f4f8fa;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
