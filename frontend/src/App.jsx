@@ -173,7 +173,7 @@ function StationMap({ stations, overviewData, selectedStationId, onStationSelect
   )
 }
 
-function LoginPage({ onLogin }) {
+function LoginPage({ onLogin, onRegister, notice }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -210,6 +210,7 @@ function LoginPage({ onLogin }) {
           <h1>成都市智慧水利监测平台</h1>
           <p className="login-subtitle">请登录以访问监测系统</p>
         </div>
+        {notice && <div className="login-notice">{notice}</div>}
         <form className="login-form" onSubmit={handleSubmit}>
           <div className="login-field">
             <label htmlFor="login-username">用户名</label>
@@ -239,6 +240,115 @@ function LoginPage({ onLogin }) {
             {loading ? '登录中...' : '登 录'}
           </button>
         </form>
+        <p className="login-register-tip">
+          没有账号？
+          <button type="button" className="link-btn" onClick={onRegister}>立即注册</button>
+        </p>
+      </div>
+    </div>
+  )
+}
+
+function RegisterPage({ onBack, onRegistered }) {
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    setError('')
+
+    if (!username.trim()) {
+      setError('用户名不能为空')
+      return
+    }
+    if (username.trim().length < 3 || username.trim().length > 30) {
+      setError('用户名长度需在3到30个字符之间')
+      return
+    }
+    if (password.length < 8) {
+      setError('密码长度不能少于8位')
+      return
+    }
+    if (password !== confirmPassword) {
+      setError('两次密码输入不一致')
+      return
+    }
+
+    setLoading(true)
+    try {
+      const response = await fetch(`${API_BASE}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username.trim(), password, confirmPassword }),
+      })
+      const data = await response.json()
+      if (!response.ok) {
+        setError(data.detail || '注册失败')
+        return
+      }
+      onRegistered()
+    } catch {
+      setError('无法连接服务器')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="login-page">
+      <div className="login-container">
+        <div className="login-header">
+          <p className="login-system-label">智慧水利 · 水情监测</p>
+          <h1>注册账号</h1>
+          <p className="login-subtitle">创建一个普通用户账号</p>
+        </div>
+        <form className="login-form" onSubmit={handleSubmit}>
+          <div className="login-field">
+            <label htmlFor="reg-username">用户名</label>
+            <input
+              id="reg-username"
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="3~30位用户名"
+              autoFocus
+              required
+            />
+          </div>
+          <div className="login-field">
+            <label htmlFor="reg-password">密码</label>
+            <input
+              id="reg-password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="至少8位密码"
+              required
+            />
+          </div>
+          <div className="login-field">
+            <label htmlFor="reg-confirm">确认密码</label>
+            <input
+              id="reg-confirm"
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              placeholder="请再次输入密码"
+              required
+            />
+          </div>
+          {error && <div className="login-error">{error}</div>}
+          <button type="submit" className="login-btn" disabled={loading}>
+            {loading ? '注册中...' : '注 册'}
+          </button>
+        </form>
+        <p className="login-register-tip">
+          已有账号？
+          <button type="button" className="link-btn" onClick={onBack}>返回登录</button>
+        </p>
       </div>
     </div>
   )
@@ -999,6 +1109,8 @@ function App() {
   const [user, setUser] = useState(null)
   const [token, setToken] = useState(null)
   const [checkingAuth, setCheckingAuth] = useState(true)
+  const [registerMode, setRegisterMode] = useState(false)
+  const [loginNotice, setLoginNotice] = useState('')
 
   useEffect(() => {
     const savedToken = localStorage.getItem('token')
@@ -1057,7 +1169,27 @@ function App() {
   }
 
   if (!user || !token) {
-    return <LoginPage onLogin={handleLogin} />
+    if (registerMode) {
+      return (
+        <RegisterPage
+          onBack={() => {
+            setRegisterMode(false)
+            setLoginNotice('')
+          }}
+          onRegistered={() => {
+            setRegisterMode(false)
+            setLoginNotice('注册成功，请登录')
+          }}
+        />
+      )
+    }
+    return (
+      <LoginPage
+        onLogin={handleLogin}
+        onRegister={() => setRegisterMode(true)}
+        notice={loginNotice}
+      />
+    )
   }
 
   return <MonitorApp user={user} onLogout={handleLogout} />

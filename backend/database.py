@@ -1,67 +1,17 @@
 import os
-import sqlite3
 import random
+import sqlite3
 from datetime import datetime, timedelta
 
+from services import STATIONS, WATER_RANGES
+from services.mock_water_provider import (
+    calculate_status,
+    get_rainfall_level,
+    generate_rainfall,
+)
 
 DB_DIR = os.path.join(os.path.dirname(__file__), "data")
-DB_PATH = os.path.join(DB_DIR, "water_monitor.db")
-
-STATIONS = [
-    {"station_id": "ST001", "station_name": "都江堰水文站", "warning_level": 5.0, "latitude": 30.99, "longitude": 103.64},
-    {"station_id": "ST002", "station_name": "金堂水文站", "warning_level": 5.5, "latitude": 30.85, "longitude": 104.43},
-    {"station_id": "ST003", "station_name": "温江水文站", "warning_level": 4.8, "latitude": 30.70, "longitude": 103.84},
-    {"station_id": "ST004", "station_name": "龙泉驿水文站", "warning_level": 6.0, "latitude": 30.56, "longitude": 104.27},
-    {"station_id": "ST005", "station_name": "新津水文站", "warning_level": 5.2, "latitude": 30.41, "longitude": 103.81},
-]
-
-WATER_RANGES = {
-    "ST001": (3.0, 6.0),
-    "ST002": (3.5, 6.5),
-    "ST003": (2.5, 5.5),
-    "ST004": (4.0, 7.0),
-    "ST005": (3.2, 6.2),
-}
-
-
-def calculate_status(water_level: float, warning_level: float, rainfall: float) -> str:
-    if water_level >= warning_level * 1.1 or rainfall >= 50:
-        return "超警"
-    if water_level >= warning_level or rainfall >= 30:
-        return "警戒"
-    if water_level >= warning_level * 0.8 or rainfall >= 15:
-        return "注意"
-    return "正常"
-
-
-def get_rainfall_level(rainfall: float) -> str:
-    if rainfall >= 50:
-        return "暴雨"
-    if rainfall >= 30:
-        return "大雨"
-    if rainfall >= 15:
-        return "中雨"
-    if rainfall >= 5:
-        return "小雨"
-    return "无明显降雨"
-
-
-def generate_rainfall() -> float:
-    weights = [
-        (0, 5, 50),
-        (5, 15, 25),
-        (15, 30, 15),
-        (30, 50, 7),
-        (50, 80, 3),
-    ]
-    total = sum(w for _, _, w in weights)
-    r = random.uniform(0, total)
-    cumulative = 0
-    for lo, hi, w in weights:
-        cumulative += w
-        if r <= cumulative:
-            return round(random.uniform(lo, hi), 1)
-    return 0.0
+DB_PATH = os.environ.get("WATER_MONITOR_DB_PATH") or os.path.join(DB_DIR, "water_monitor.db")
 
 
 def get_connection():
@@ -106,6 +56,29 @@ def init_db():
         cursor.execute("UPDATE water_data SET station_id = 'ST001' WHERE station_id IS NULL OR station_id = ''")
     if "rainfall" not in columns:
         cursor.execute("ALTER TABLE water_data ADD COLUMN rainfall REAL NOT NULL DEFAULT 0.0")
+
+    # ── 第13阶段迁移：新增数据来源 / 数据质量 / 采集时间字段（保留旧数据）──
+    if "source" not in columns:
+        cursor.execute("ALTER TABLE water_data ADD COLUMN source TEXT NOT NULL DEFAULT 'mock'")
+    if "data_quality" not in columns:
+        cursor.execute("ALTER TABLE water_data ADD COLUMN data_quality TEXT NOT NULL DEFAULT 'valid'")
+    if "collected_at" not in columns:
+        cursor.execute("ALTER TABLE water_data ADD COLUMN collected_at TEXT NOT NULL DEFAULT ''")
+        cursor.execute("UPDATE water_data SET collected_at = created_at WHERE collected_at = '' OR collected_at IS NULL")
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS collection_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            provider TEXT NOT NULL,
+            status TEXT NOT NULL,
+            record_count INTEGER NOT NULL DEFAULT 0,
+            valid_count INTEGER NOT NULL DEFAULT 0,
+            invalid_count INTEGER NOT NULL DEFAULT 0,
+            fallback_count INTEGER NOT NULL DEFAULT 0,
+            error_reason TEXT NOT NULL DEFAULT '',
+            collected_at TEXT NOT NULL
+        )
+    """)
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS warning_records (
@@ -236,13 +209,18 @@ def get_station_by_id(station_id: str) -> dict | None:
     return dict(row) if row else None
 
 
-def insert_water_data(station_id: str, station_name: str, water_level: float, warning_level: float, rainfall: float, status: str) -> int:
+def insert_water_data(station_id: str, station_name: str, water_level: float, warning_level: float, rainfall: float, status: str,
+                      source: str = "mock", data_quality: str = "valid",
+                      created_at: str = None, collected_at: str = None) -> int:
     conn = get_connection()
     cursor = conn.cursor()
-    created_at = datetime.now().isoformat(timespec="seconds")
+    if not created_at:
+        created_at = datetime.now().isoformat(timespec="seconds")
+    if not collected_at:
+        collected_at = created_at
     cursor.execute(
-        "INSERT INTO water_data (station_id, station_name, water_level, warning_level, rainfall, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (station_id, station_name, water_level, warning_level, rainfall, status, created_at),
+        "INSERT INTO water_data (station_id, station_name, water_level, warning_level, rainfall, status, created_at, source, data_quality, collected_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (station_id, station_name, water_level, warning_level, rainfall, status, created_at, source, data_quality, collected_at),
     )
     conn.commit()
     row_id = cursor.lastrowid
@@ -444,6 +422,62 @@ def get_latest_warning(station_id: str) -> dict | None:
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+# ──────────────────────────── 第13阶段：数据质量统计 / 采集日志 ────────────────────────────
+
+
+def get_data_quality_stats() -> dict:
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    row = cursor.execute("SELECT COUNT(*) as cnt FROM water_data").fetchone()
+    total = row["cnt"]
+
+    def count_for(quality: str) -> int:
+        return cursor.execute(
+            "SELECT COUNT(*) as cnt FROM water_data WHERE data_quality = ?", (quality,)
+        ).fetchone()["cnt"]
+
+    latest = cursor.execute("SELECT MAX(collected_at) as ts FROM water_data").fetchone()["ts"]
+
+    conn.close()
+    return {
+        "total": total,
+        "valid": count_for("valid"),
+        "invalid": count_for("invalid"),
+        "fallback": count_for("fallback"),
+        "latest_collection_time": latest or "",
+    }
+
+
+def log_collection(provider: str, status: str, record_count: int = 0, valid_count: int = 0,
+                   invalid_count: int = 0, fallback_count: int = 0,
+                   error_reason: str = "", collected_at: str = None) -> int:
+    conn = get_connection()
+    cursor = conn.cursor()
+    if not collected_at:
+        collected_at = datetime.now().isoformat(timespec="seconds")
+    cursor.execute(
+        "INSERT INTO collection_logs (provider, status, record_count, valid_count, invalid_count, fallback_count, error_reason, collected_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (provider, status, record_count, valid_count, invalid_count, fallback_count, error_reason, collected_at),
+    )
+    conn.commit()
+    row_id = cursor.lastrowid
+    conn.close()
+    return row_id
+
+
+def get_collection_logs(limit: int = 20) -> list:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, provider, status, record_count, valid_count, invalid_count, fallback_count, error_reason, collected_at FROM collection_logs ORDER BY collected_at DESC LIMIT ?",
+        (limit,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
 
 
 def create_user(username: str, password_hash: str, role: str = "user") -> int:

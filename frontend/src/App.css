@@ -958,6 +958,40 @@ button:disabled {
   opacity: 0.65;
 }
 
+.login-notice {
+  margin-bottom: 18px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  color: #126b36;
+  background: #effbf3;
+  font-size: 14px;
+  text-align: center;
+}
+
+.login-register-tip {
+  margin: 18px 0 0;
+  color: #58727b;
+  font-size: 14px;
+  text-align: center;
+}
+
+.link-btn {
+  padding: 0;
+  margin-left: 4px;
+  border: 0;
+  background: none;
+  color: #0b5d74;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.link-btn:hover {
+  color: #08475a;
+}
+
 /* ──────────────────────────── User Info Header ──────────────────────────── */
 
 .header-top {

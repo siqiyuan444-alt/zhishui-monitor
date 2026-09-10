@@ -67,6 +67,12 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+    confirm_password: str = ""
+
+
 class CreateUserRequest(BaseModel):
     username: str
     password: str
@@ -130,6 +136,29 @@ def login(req: LoginRequest):
             "role": user["role"],
         },
     }
+
+
+@app.post("/api/auth/register")
+def register(req: RegisterRequest):
+    username = (req.username or "").strip()
+    password = req.password or ""
+
+    if not username:
+        raise HTTPException(status_code=400, detail="用户名不能为空")
+    if len(username) < 3 or len(username) > 30:
+        raise HTTPException(status_code=400, detail="用户名长度需在3到30个字符之间")
+    if len(password) < 8:
+        raise HTTPException(status_code=400, detail="密码长度不能少于8位")
+    if req.confirm_password and req.confirm_password != password:
+        raise HTTPException(status_code=400, detail="两次密码输入不一致")
+
+    if get_user_by_username(username):
+        raise HTTPException(status_code=400, detail="用户名已存在")
+
+    password_hash = argon2.hash(password)
+    # 自主注册用户强制为普通用户 user，客户端传入的任何 role 都会被忽略
+    user_id = create_user(username=username, password_hash=password_hash, role="user")
+    return {"success": True, "message": "注册成功", "user_id": user_id}
 
 
 @app.get("/api/auth/me")
