@@ -1,10 +1,14 @@
 import os
 import random
+from datetime import datetime, timedelta
 
-from fastapi import FastAPI, Query, HTTPException, Request
+import jwt
+from fastapi import FastAPI, Query, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from passlib.hash import argon2
+from pydantic import BaseModel
 
 from database import (
     get_stations,
@@ -22,7 +26,17 @@ from database import (
     handle_warning,
     get_latest_warning,
     WATER_RANGES,
+    get_user_by_username,
+    get_user_by_id,
+    get_all_users,
+    create_user,
+    delete_user,
+    update_user_role,
 )
+
+JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "dev-secret-key-change-in-production")
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRE_MINUTES = int(os.environ.get("JWT_EXPIRE_MINUTES", "60"))
 
 app = FastAPI()
 
@@ -40,13 +54,143 @@ else:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
-    allow_credentials=False,
-    allow_methods=["GET", "POST"],
-    allow_headers=[],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["*"],
 )
 
 _dist_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend", "dist")
 
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class CreateUserRequest(BaseModel):
+    username: str
+    password: str
+    role: str = "user"
+
+
+class UpdateRoleRequest(BaseModel):
+    role: str
+
+
+def create_access_token(data: dict) -> str:
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=JWT_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+
+def get_current_user(authorization: str = Header(default="")):
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="未登录")
+    token = authorization[7:]
+    try:
+        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+        user_id = payload.get("user_id")
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="无效的token")
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="token已过期")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="无效的token")
+    user = get_user_by_id(user_id)
+    if not user or not user["is_active"]:
+        raise HTTPException(status_code=401, detail="用户不存在或已禁用")
+    return user
+
+
+def require_admin(user: dict = Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="需要管理员权限")
+    return user
+
+
+# ──────────────────────────── Auth API ────────────────────────────
+
+@app.post("/api/auth/login")
+def login(req: LoginRequest):
+    user = get_user_by_username(req.username)
+    if not user:
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    if not user["is_active"]:
+        raise HTTPException(status_code=403, detail="账户已被禁用")
+    if not argon2.verify(req.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+    token = create_access_token({"user_id": user["id"], "username": user["username"], "role": user["role"]})
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {
+            "id": user["id"],
+            "username": user["username"],
+            "role": user["role"],
+        },
+    }
+
+
+@app.get("/api/auth/me")
+def get_me(user: dict = Depends(get_current_user)):
+    return {
+        "id": user["id"],
+        "username": user["username"],
+        "role": user["role"],
+        "is_active": user["is_active"],
+        "created_at": user["created_at"],
+    }
+
+
+@app.post("/api/auth/logout")
+def logout():
+    return {"success": True}
+
+
+# ──────────────────────────── User Management API ────────────────────────────
+
+@app.get("/api/users")
+def list_users(admin: dict = Depends(require_admin)):
+    users = get_all_users()
+    return {"data": users}
+
+
+@app.post("/api/users")
+def create_user_endpoint(req: CreateUserRequest, admin: dict = Depends(require_admin)):
+    existing = get_user_by_username(req.username)
+    if existing:
+        raise HTTPException(status_code=400, detail="用户名已存在")
+    if req.role not in ("admin", "user"):
+        raise HTTPException(status_code=400, detail="角色必须是 admin 或 user")
+    password_hash = argon2.hash(req.password)
+    user_id = create_user(username=req.username, password_hash=password_hash, role=req.role)
+    return {"success": True, "user_id": user_id}
+
+
+@app.delete("/api/users/{user_id}")
+def delete_user_endpoint(user_id: int, admin: dict = Depends(require_admin)):
+    if user_id == admin["id"]:
+        raise HTTPException(status_code=400, detail="不能删除自己")
+    success = delete_user(user_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    return {"success": True}
+
+
+@app.post("/api/users/{user_id}/role")
+def update_user_role_endpoint(user_id: int, req: UpdateRoleRequest, admin: dict = Depends(require_admin)):
+    if req.role not in ("admin", "user"):
+        raise HTTPException(status_code=400, detail="角色必须是 admin 或 user")
+    if user_id == admin["id"]:
+        raise HTTPException(status_code=400, detail="不能修改自己的角色")
+    success = update_user_role(user_id, req.role)
+    if not success:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    return {"success": True}
+
+
+# ──────────────────────────── Original Monitoring API (unchanged) ────────────────────────────
 
 @app.get("/api/health")
 def health_check():

@@ -150,6 +150,9 @@ def init_db():
     else:
         _ensure_all_stations_have_data(conn)
 
+    _init_users(conn)
+    _ensure_admin_user(conn, os.environ.get("ADMIN_PASSWORD", ""))
+
     conn.close()
 
 
@@ -441,6 +444,117 @@ def get_latest_warning(station_id: str) -> dict | None:
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def create_user(username: str, password_hash: str, role: str = "user") -> int:
+    conn = get_connection()
+    cursor = conn.cursor()
+    created_at = datetime.now().isoformat(timespec="seconds")
+    cursor.execute(
+        "INSERT INTO users (username, password_hash, role, is_active, created_at) VALUES (?, ?, ?, 1, ?)",
+        (username, password_hash, role, created_at),
+    )
+    conn.commit()
+    row_id = cursor.lastrowid
+    conn.close()
+    return row_id
+
+
+def get_user_by_username(username: str) -> dict | None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, username, password_hash, role, is_active, created_at FROM users WHERE username = ?",
+        (username,),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_user_by_id(user_id: int) -> dict | None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, username, role, is_active, created_at FROM users WHERE id = ?",
+        (user_id,),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_all_users() -> list:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, username, role, is_active, created_at FROM users ORDER BY id"
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def delete_user(user_id: int) -> bool:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM users WHERE id = ?", (user_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return False
+    cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def update_user_role(user_id: int, role: str) -> bool:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM users WHERE id = ?", (user_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return False
+    cursor.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def _init_users(conn):
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'user',
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+
+
+def _ensure_admin_user(conn, admin_password: str):
+    from passlib.hash import argon2
+
+    cursor = conn.cursor()
+    admin = cursor.execute(
+        "SELECT id FROM users WHERE username = 'admin'"
+    ).fetchone()
+
+    if not admin and admin_password:
+        password_hash = argon2.hash(admin_password)
+        created_at = datetime.now().isoformat(timespec="seconds")
+        cursor.execute(
+            "INSERT INTO users (username, password_hash, role, is_active, created_at) VALUES (?, ?, ?, 1, ?)",
+            ("admin", password_hash, "admin", created_at),
+        )
+        conn.commit()
 
 
 init_db()

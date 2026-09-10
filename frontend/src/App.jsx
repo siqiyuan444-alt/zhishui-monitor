@@ -173,7 +173,256 @@ function StationMap({ stations, overviewData, selectedStationId, onStationSelect
   )
 }
 
-function App() {
+function LoginPage({ onLogin }) {
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    setError('')
+    setLoading(true)
+    try {
+      const response = await fetch(`${API_BASE}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      })
+      const data = await response.json()
+      if (!response.ok) {
+        setError(data.detail || '登录失败')
+        return
+      }
+      onLogin(data.access_token, data.user)
+    } catch {
+      setError('无法连接服务器')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="login-page">
+      <div className="login-container">
+        <div className="login-header">
+          <p className="login-system-label">智慧水利 · 水情监测</p>
+          <h1>成都市智慧水利监测平台</h1>
+          <p className="login-subtitle">请登录以访问监测系统</p>
+        </div>
+        <form className="login-form" onSubmit={handleSubmit}>
+          <div className="login-field">
+            <label htmlFor="login-username">用户名</label>
+            <input
+              id="login-username"
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="请输入用户名"
+              autoFocus
+              required
+            />
+          </div>
+          <div className="login-field">
+            <label htmlFor="login-password">密码</label>
+            <input
+              id="login-password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="请输入密码"
+              required
+            />
+          </div>
+          {error && <div className="login-error">{error}</div>}
+          <button type="submit" className="login-btn" disabled={loading}>
+            {loading ? '登录中...' : '登 录'}
+          </button>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+function UserManager({ token, onBack }) {
+  const [users, setUsers] = useState([])
+  const [newUsername, setNewUsername] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [newRole, setNewRole] = useState('user')
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+
+  const loadUsers = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/users`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (response.ok) {
+        const result = await response.json()
+        setUsers(result.data)
+      }
+    } catch {
+      // ignore
+    }
+  }, [token])
+
+  useEffect(() => {
+    loadUsers()
+  }, [loadUsers])
+
+  const handleCreate = async (e) => {
+    e.preventDefault()
+    setError('')
+    setSuccess('')
+    try {
+      const response = await fetch(`${API_BASE}/api/users`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ username: newUsername, password: newPassword, role: newRole }),
+      })
+      const data = await response.json()
+      if (!response.ok) {
+        setError(data.detail || '创建失败')
+        return
+      }
+      setSuccess('用户创建成功')
+      setNewUsername('')
+      setNewPassword('')
+      setNewRole('user')
+      await loadUsers()
+    } catch {
+      setError('创建失败')
+    }
+  }
+
+  const handleDelete = async (userId) => {
+    if (!confirm('确定要删除该用户吗？')) return
+    try {
+      const response = await fetch(`${API_BASE}/api/users/${userId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (response.ok) {
+        await loadUsers()
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const handleRoleChange = async (userId, role) => {
+    try {
+      const response = await fetch(`${API_BASE}/api/users/${userId}/role`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ role }),
+      })
+      if (response.ok) {
+        await loadUsers()
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return (
+    <div className="user-manager-page">
+      <div className="user-manager-container">
+        <div className="user-manager-header">
+          <h1>用户管理</h1>
+          <button className="back-btn" onClick={onBack}>返回监测大屏</button>
+        </div>
+
+        <form className="create-user-form" onSubmit={handleCreate}>
+          <h2>创建新用户</h2>
+          <div className="form-row">
+            <div className="form-field">
+              <label>用户名</label>
+              <input
+                type="text"
+                value={newUsername}
+                onChange={(e) => setNewUsername(e.target.value)}
+                placeholder="用户名"
+                required
+              />
+            </div>
+            <div className="form-field">
+              <label>密码</label>
+              <input
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="密码"
+                required
+              />
+            </div>
+            <div className="form-field">
+              <label>角色</label>
+              <select value={newRole} onChange={(e) => setNewRole(e.target.value)}>
+                <option value="user">普通用户</option>
+                <option value="admin">管理员</option>
+              </select>
+            </div>
+            <button type="submit" className="create-btn">创建</button>
+          </div>
+          {error && <div className="form-error">{error}</div>}
+          {success && <div className="form-success">{success}</div>}
+        </form>
+
+        <div className="user-list-section">
+          <h2>用户列表</h2>
+          <table className="user-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>用户名</th>
+                <th>角色</th>
+                <th>状态</th>
+                <th>创建时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.map((u) => (
+                <tr key={u.id}>
+                  <td>{u.id}</td>
+                  <td>{u.username}</td>
+                  <td>
+                    <select
+                      value={u.role}
+                      onChange={(e) => handleRoleChange(u.id, e.target.value)}
+                      className="role-select"
+                    >
+                      <option value="user">普通用户</option>
+                      <option value="admin">管理员</option>
+                    </select>
+                  </td>
+                  <td>{u.is_active ? '启用' : '禁用'}</td>
+                  <td>{new Date(u.created_at).toLocaleString('zh-CN')}</td>
+                  <td>
+                    {u.username !== 'admin' && (
+                      <button className="delete-btn" onClick={() => handleDelete(u.id)}>
+                        删除
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function MonitorApp({ user, onLogout }) {
   const [stations, setStations] = useState([])
   const [selectedStationId, setSelectedStationId] = useState('ST001')
   const [waterData, setWaterData] = useState(null)
@@ -186,6 +435,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState('')
   const [dataErrorMessage, setDataErrorMessage] = useState('')
+  const [showUserManager, setShowUserManager] = useState(false)
   const timerRef = useRef(null)
 
   const loadStations = useCallback(async () => {
@@ -454,13 +704,29 @@ function App() {
     ],
   }
 
+  if (showUserManager) {
+    return <UserManager token={localStorage.getItem('token')} onBack={() => setShowUserManager(false)} />
+  }
+
   return (
     <main className="monitor-page">
       <section className="monitor-panel">
         <header className="page-header">
-          <p className="system-label">智慧水利 · 水情监测</p>
-          <h1>成都市智慧水利监测平台</h1>
-          <p className="subtitle">成都地区雨情水情综合监测与预警系统</p>
+          <div className="header-top">
+            <div>
+              <p className="system-label">智慧水利 · 水情监测</p>
+              <h1>成都市智慧水利监测平台</h1>
+              <p className="subtitle">成都地区雨情水情综合监测与预警系统</p>
+            </div>
+            <div className="user-info">
+              <span className="user-role-badge">{user.role === 'admin' ? '管理员' : '用户'}</span>
+              <span className="user-name">{user.username}</span>
+              {user.role === 'admin' && (
+                <button className="admin-btn" onClick={() => setShowUserManager(true)}>用户管理</button>
+              )}
+              <button className="logout-btn" onClick={onLogout}>退出</button>
+            </div>
+          </div>
         </header>
 
         {stations.length > 0 && (
@@ -727,6 +993,74 @@ function App() {
       </section>
     </main>
   )
+}
+
+function App() {
+  const [user, setUser] = useState(null)
+  const [token, setToken] = useState(null)
+  const [checkingAuth, setCheckingAuth] = useState(true)
+
+  useEffect(() => {
+    const savedToken = localStorage.getItem('token')
+    const savedUser = localStorage.getItem('user')
+    if (savedToken && savedUser) {
+      try {
+        setToken(savedToken)
+        setUser(JSON.parse(savedUser))
+      } catch {
+        localStorage.removeItem('token')
+        localStorage.removeItem('user')
+      }
+    }
+    setCheckingAuth(false)
+  }, [])
+
+  useEffect(() => {
+    if (!token) return
+    const checkToken = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/api/auth/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (!response.ok) {
+          handleLogout()
+        }
+      } catch {
+        // keep token if server unreachable
+      }
+    }
+    checkToken()
+  }, [token])
+
+  const handleLogin = (accessToken, userData) => {
+    setToken(accessToken)
+    setUser(userData)
+    localStorage.setItem('token', accessToken)
+    localStorage.setItem('user', JSON.stringify(userData))
+  }
+
+  const handleLogout = () => {
+    setToken(null)
+    setUser(null)
+    localStorage.removeItem('token')
+    localStorage.removeItem('user')
+  }
+
+  if (checkingAuth) {
+    return (
+      <div className="login-page">
+        <div className="login-container">
+          <p className="login-subtitle">加载中...</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (!user || !token) {
+    return <LoginPage onLogin={handleLogin} />
+  }
+
+  return <MonitorApp user={user} onLogout={handleLogout} />
 }
 
 export default App

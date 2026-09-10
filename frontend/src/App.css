@@ -848,3 +848,395 @@ button:disabled {
     height: 350px;
   }
 }
+
+/* ──────────────────────────── Login Page ──────────────────────────── */
+
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(145deg, #e7f5fa, #f8fbfc);
+  padding: 24px;
+}
+
+.login-container {
+  width: 100%;
+  max-width: 420px;
+  padding: 48px 40px;
+  background: #ffffff;
+  border: 1px solid #d8e8ed;
+  border-radius: 18px;
+  box-shadow: 0 14px 35px rgba(17, 78, 96, 0.12);
+}
+
+.login-header {
+  text-align: center;
+  margin-bottom: 36px;
+}
+
+.login-system-label {
+  margin: 0;
+  color: #58727b;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.login-header h1 {
+  margin: 8px 0;
+  color: #0b5d74;
+  font-size: 28px;
+}
+
+.login-subtitle {
+  margin: 0;
+  color: #58727b;
+  font-size: 15px;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.login-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.login-field label {
+  color: #31515c;
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.login-field input {
+  padding: 12px 14px;
+  border: 1px solid #b8d4de;
+  border-radius: 8px;
+  font-size: 16px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.login-field input:focus {
+  border-color: #0b5d74;
+}
+
+.login-error {
+  padding: 10px 14px;
+  border-radius: 8px;
+  color: #9d2020;
+  background: #fff0f0;
+  font-size: 14px;
+}
+
+.login-btn {
+  width: 100%;
+  padding: 12px;
+  border: 0;
+  border-radius: 8px;
+  color: #ffffff;
+  background: #0b5d74;
+  font-size: 16px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.login-btn:hover:not(:disabled) {
+  background: #08475a;
+}
+
+.login-btn:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+/* ──────────────────────────── User Info Header ──────────────────────────── */
+
+.header-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.user-role-badge {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #0b5d74;
+  background: #e5f5fa;
+}
+
+.user-name {
+  color: #31515c;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.admin-btn {
+  margin: 0;
+  padding: 6px 14px;
+  border: 1px solid #0b5d74;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #0b5d74;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.admin-btn:hover {
+  background: #0b5d74;
+  color: #ffffff;
+}
+
+.logout-btn {
+  margin: 0;
+  padding: 6px 14px;
+  border: 1px solid #dc2626;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #dc2626;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.logout-btn:hover {
+  background: #dc2626;
+  color: #ffffff;
+}
+
+/* ──────────────────────────── User Manager ──────────────────────────── */
+
+.user-manager-page {
+  min-height: 100vh;
+  padding: 48px 24px;
+  background: linear-gradient(145deg, #e7f5fa, #f8fbfc);
+}
+
+.user-manager-container {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 42px;
+  background: #ffffff;
+  border: 1px solid #d8e8ed;
+  border-radius: 18px;
+  box-shadow: 0 14px 35px rgba(17, 78, 96, 0.12);
+}
+
+.user-manager-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 32px;
+}
+
+.user-manager-header h1 {
+  margin: 0;
+  color: #0b5d74;
+  font-size: 28px;
+}
+
+.back-btn {
+  margin: 0;
+  padding: 8px 18px;
+  border: 1px solid #0b5d74;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #0b5d74;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.back-btn:hover {
+  background: #0b5d74;
+  color: #ffffff;
+}
+
+.create-user-form {
+  margin-bottom: 36px;
+  padding: 24px;
+  background: #f8fcfd;
+  border: 1px solid #d8e8ed;
+  border-radius: 12px;
+}
+
+.create-user-form h2 {
+  margin: 0 0 18px;
+  color: #173a46;
+  font-size: 18px;
+}
+
+.form-row {
+  display: flex;
+  gap: 16px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 140px;
+}
+
+.form-field label {
+  color: #31515c;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.form-field input,
+.form-field select {
+  padding: 10px 12px;
+  border: 1px solid #b8d4de;
+  border-radius: 8px;
+  font-size: 15px;
+  font-family: inherit;
+  outline: none;
+}
+
+.form-field input:focus,
+.form-field select:focus {
+  border-color: #0b5d74;
+}
+
+.create-btn {
+  margin: 0;
+  padding: 10px 24px;
+  border: 0;
+  border-radius: 8px;
+  color: #ffffff;
+  background: #0b5d74;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.create-btn:hover {
+  background: #08475a;
+}
+
+.form-error {
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  color: #9d2020;
+  background: #fff0f0;
+  font-size: 14px;
+}
+
+.form-success {
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  color: #126b36;
+  background: #effbf3;
+  font-size: 14px;
+}
+
+.user-list-section h2 {
+  margin: 0 0 18px;
+  color: #173a46;
+  font-size: 18px;
+}
+
+.user-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.user-table th {
+  padding: 10px 12px;
+  text-align: left;
+  color: #58727b;
+  font-weight: 600;
+  background: #f0f8fb;
+  border-bottom: 2px solid #d8e8ed;
+}
+
+.user-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #e8f0f4;
+  color: #173a46;
+}
+
+.user-table tr:hover td {
+  background: #f8fcfd;
+}
+
+.role-select {
+  padding: 4px 8px;
+  border: 1px solid #b8d4de;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.delete-btn {
+  margin: 0;
+  padding: 4px 12px;
+  border: 1px solid #dc2626;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #dc2626;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.delete-btn:hover {
+  background: #dc2626;
+  color: #ffffff;
+}
+
+@media (max-width: 720px) {
+  .header-top {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .user-info {
+    flex-wrap: wrap;
+  }
+
+  .form-row {
+    flex-direction: column;
+  }
+
+  .user-manager-header {
+    flex-direction: column;
+    gap: 12px;
+    align-items: flex-start;
+  }
+
+  .user-manager-container {
+    padding: 28px 20px;
+  }
+}
