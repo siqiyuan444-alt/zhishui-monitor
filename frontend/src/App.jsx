@@ -29,6 +29,89 @@ function getStatusColor(status) {
   return STATUS_COLORS[status] || '#16803c'
 }
 
+// ── 第15阶段：多站综合对比辅助函数 ──
+const COMPARE_CHART_COLORS = ['#0b5d74', '#2563eb', '#d97706', '#16a34a', '#9333ea']
+
+function riskLevelLabel(riskLevel) {
+  const labels = {
+    danger: '红色预警',
+    warning: '橙色预警',
+    attention: '黄色预警',
+    normal: '正常',
+  }
+  return labels[riskLevel] || riskLevel || '—'
+}
+
+function trendLabel(trend) {
+  const labels = { rising: '↑ 上升', falling: '↓ 下降', stable: '→ 平稳' }
+  return labels[trend] || trend || '—'
+}
+
+function formatAxisTime(value, is7d) {
+  const d = new Date(value)
+  const mm = (d.getMonth() + 1).toString().padStart(2, '0')
+  const dd = d.getDate().toString().padStart(2, '0')
+  const hh = d.getHours().toString().padStart(2, '0')
+  const mi = d.getMinutes().toString().padStart(2, '0')
+  return is7d ? `${mm}/${dd} ${hh}:${mi}` : `${hh}:${mi}`
+}
+
+function waterCompareOption(data, range) {
+  const is7d = range === '168h'
+  return {
+    tooltip: { trigger: 'axis' },
+    legend: { top: 0 },
+    grid: { left: 55, right: 20, top: 40, bottom: 50 },
+    dataZoom: [{ type: 'inside', start: 0, end: 100 }],
+    xAxis: {
+      type: 'category',
+      name: '时间',
+      axisLabel: { rotate: is7d ? 35 : 0, formatter: (val) => formatAxisTime(val, is7d) },
+      data: data.series.timestamps,
+    },
+    yAxis: { type: 'value', name: '水位（m）', axisLabel: { formatter: '{value} m' } },
+    series: data.stations.map((s, index) => {
+      const color = COMPARE_CHART_COLORS[index % COMPARE_CHART_COLORS.length]
+      return {
+        name: s.station_name,
+        type: 'line',
+        data: data.series.levels[s.station_id] || [],
+        smooth: true,
+        symbolSize: 5,
+        lineStyle: { color, width: 2 },
+        itemStyle: { color },
+      }
+    }),
+  }
+}
+
+function rainfallCompareOption(data) {
+  return {
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    legend: { top: 0, data: ['累计降雨'] },
+    grid: { left: 55, right: 20, top: 40, bottom: 50 },
+    xAxis: { type: 'category', name: '站点', data: data.stations.map((s) => s.station_name) },
+    yAxis: { type: 'value', name: '降雨量（mm）', axisLabel: { formatter: '{value} mm' } },
+    series: [
+      {
+        name: '累计降雨',
+        type: 'bar',
+        barMaxWidth: 40,
+        data: data.stations.map((s) => ({
+          value: s.total_rainfall,
+          itemStyle: {
+            color: s.total_rainfall >= 50 ? '#dc2626'
+              : s.total_rainfall >= 30 ? '#ea580c'
+              : s.total_rainfall >= 15 ? '#d97706'
+              : s.total_rainfall >= 5 ? '#2563eb'
+              : '#94a3b8',
+          },
+        })),
+      },
+    ],
+  }
+}
+
 function getMarkerIcon(status, isSelected) {
   if (isSelected) {
     return new L.DivIcon({
@@ -548,6 +631,16 @@ function MonitorApp({ user, onLogout }) {
   const [showUserManager, setShowUserManager] = useState(false)
   const timerRef = useRef(null)
 
+  // ── 第14阶段：历史分析状态 ──
+  const [historyRange, setHistoryRange] = useState('24h')
+  const [analysisData, setAnalysisData] = useState(null)
+  const [analysisLoading, setAnalysisLoading] = useState(false)
+
+  // ── 第15阶段：多站综合对比状态 ──
+  const [comparisonRange, setComparisonRange] = useState('24h')
+  const [comparisonData, setComparisonData] = useState(null)
+  const [comparisonLoading, setComparisonLoading] = useState(false)
+
   const loadStations = useCallback(async () => {
     try {
       const response = await fetch(`${API_BASE}/api/stations`)
@@ -713,6 +806,45 @@ function MonitorApp({ user, onLogout }) {
     }
   }, [loadHistoryData, loadOverview, loadRainfallSummary, loadWarnings, loadWarningSummary, loadLatestWarnings])
 
+  const loadHistoryAnalysis = useCallback(async (stationId, hours) => {
+    setAnalysisLoading(true)
+    setAnalysisData(null)
+    try {
+      const [historyRes, trendRes, statsRes, forecastRes] = await Promise.allSettled([
+        fetch(`${API_BASE}/api/history?station_id=${stationId}&hours=${hours}`).then(r => r.json()),
+        fetch(`${API_BASE}/api/trend?station_id=${stationId}&hours=${hours}`).then(r => r.json()),
+        fetch(`${API_BASE}/api/statistics?station_id=${stationId}&hours=${hours}`).then(r => r.json()),
+        fetch(`${API_BASE}/api/forecast?station_id=${stationId}&hours=${hours}`).then(r => r.json()),
+      ])
+      setAnalysisData({
+        history: historyRes.status === 'fulfilled' ? historyRes.value : null,
+        trend: trendRes.status === 'fulfilled' ? trendRes.value : null,
+        statistics: statsRes.status === 'fulfilled' ? statsRes.value : null,
+        forecast: forecastRes.status === 'fulfilled' ? forecastRes.value : null,
+      })
+    } catch {
+      setAnalysisData(null)
+    } finally {
+      setAnalysisLoading(false)
+    }
+  }, [])
+
+  const loadComparison = useCallback(async (hours) => {
+    setComparisonLoading(true)
+    setComparisonData(null)
+    try {
+      const response = await fetch(`${API_BASE}/api/comparison?hours=${hours}`)
+      if (response.ok) {
+        const data = await response.json()
+        setComparisonData(data)
+      }
+    } catch {
+      setComparisonData(null)
+    } finally {
+      setComparisonLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     loadStations()
   }, [loadStations])
@@ -733,6 +865,16 @@ function MonitorApp({ user, onLogout }) {
       }
     }
   }, [selectedStationId, loadWaterData])
+
+  useEffect(() => {
+    const hours = historyRange === '24h' ? 24 : 168
+    loadHistoryAnalysis(selectedStationId, hours)
+  }, [selectedStationId, historyRange, loadHistoryAnalysis])
+
+  useEffect(() => {
+    const hours = comparisonRange === '24h' ? 24 : 168
+    loadComparison(hours)
+  }, [comparisonRange, loadComparison])
 
   const handleStationChange = (e) => {
     setSelectedStationId(e.target.value)
@@ -1100,6 +1242,333 @@ function MonitorApp({ user, onLogout }) {
             <ReactECharts option={rainfallChartOption} style={{ height: '300px' }} />
           </section>
         )}
+
+        {/* ── 第14阶段：历史数据分析与趋势预测 ── */}
+        <section className="history-analysis-section" aria-label="历史分析">
+          <div className="history-header">
+            <h2>历史分析</h2>
+            <div className="history-range-toggle">
+              <button
+                type="button"
+                className={historyRange === '24h' ? 'active' : ''}
+                onClick={() => setHistoryRange('24h')}
+              >24小时</button>
+              <button
+                type="button"
+                className={historyRange === '168h' ? 'active' : ''}
+                onClick={() => setHistoryRange('168h')}
+              >7天</button>
+            </div>
+          </div>
+
+          {analysisLoading && (
+            <p className="notice loading">正在加载历史分析数据...</p>
+          )}
+
+          {!analysisLoading && analysisData && (
+            <>
+              {analysisData.statistics && analysisData.statistics.sufficient && (
+                <div className="history-stats-grid">
+                  <div className="stat-card">
+                    <span className="stat-label">最高水位</span>
+                    <span className="stat-value">{analysisData.statistics.max_water_level} m</span>
+                  </div>
+                  <div className="stat-card">
+                    <span className="stat-label">最低水位</span>
+                    <span className="stat-value">{analysisData.statistics.min_water_level} m</span>
+                  </div>
+                  <div className="stat-card">
+                    <span className="stat-label">平均水位</span>
+                    <span className="stat-value">{analysisData.statistics.avg_water_level} m</span>
+                  </div>
+                  <div className="stat-card">
+                    <span className="stat-label">累计降雨</span>
+                    <span className="stat-value">{analysisData.statistics.total_rainfall} mm</span>
+                  </div>
+                  <div className="stat-card">
+                    <span className="stat-label">预警次数</span>
+                    <span className="stat-value">{analysisData.statistics.warning_count} 次</span>
+                  </div>
+                </div>
+              )}
+
+              {!analysisData.statistics || !analysisData.statistics.sufficient ? (
+                <p className="notice insufficient">历史数据不足，暂无法生成统计分析</p>
+              ) : null}
+
+              {analysisData.trend && analysisData.trend.sufficient && (
+                <div className={`trend-analysis-card trend-${analysisData.trend.trend}`}>
+                  <div className="trend-badge-row">
+                    <span className="stat-label">水位趋势</span>
+                    <span className={`trend-badge trend-badge-${analysisData.trend.trend}`}>
+                      {analysisData.trend.trend === 'rising' ? '↑ 上升'
+                        : analysisData.trend.trend === 'falling' ? '↓ 下降'
+                        : '→ 平稳'}
+                    </span>
+                    <span className="trend-change">
+                      变化量：{analysisData.trend.change >= 0 ? '+' : ''}{analysisData.trend.change} m
+                    </span>
+                  </div>
+                  <p className="trend-desc">{analysisData.trend.trend_description}</p>
+                </div>
+              )}
+
+              {analysisData.trend && !analysisData.trend.sufficient && (
+                <p className="notice insufficient">历史数据不足，暂无法进行趋势分析</p>
+              )}
+
+              {analysisData.forecast && analysisData.forecast.sufficient && (
+                <div className="forecast-card">
+                  <h3>趋势预测</h3>
+                  <div className="forecast-grid">
+                    <div className="forecast-item">
+                      <span className="stat-label">当前水位</span>
+                      <span className="stat-value">{analysisData.forecast.current_water_level} m</span>
+                    </div>
+                    <div className="forecast-item">
+                      <span className="stat-label">预测水位</span>
+                      <span className="stat-value">{analysisData.forecast.predicted_water_level} m</span>
+                    </div>
+                    <div className="forecast-item">
+                      <span className="stat-label">趋势</span>
+                      <span className={`trend-badge trend-badge-${analysisData.forecast.trend}`}>
+                        {analysisData.forecast.trend === 'rising' ? '↑ 上升'
+                          : analysisData.forecast.trend === 'falling' ? '↓ 下降'
+                          : '→ 平稳'}
+                      </span>
+                    </div>
+                    <div className="forecast-item">
+                      <span className="stat-label">风险等级</span>
+                      <span className={`risk-badge risk-${analysisData.forecast.risk_level}`}>
+                        {analysisData.forecast.risk_level === 'danger' ? '红色预警'
+                          : analysisData.forecast.risk_level === 'warning' ? '橙色预警'
+                          : analysisData.forecast.risk_level === 'attention' ? '黄色预警'
+                          : '正常'}
+                      </span>
+                    </div>
+                  </div>
+                  <p className="forecast-note">{analysisData.forecast.message}</p>
+                </div>
+              )}
+
+              {analysisData.forecast && !analysisData.forecast.sufficient && (
+                <p className="notice insufficient">历史数据不足，暂无法进行趋势预测</p>
+              )}
+
+              {analysisData.history && analysisData.history.data && analysisData.history.data.length > 0 && (
+                <div className="history-charts">
+                  <div className="history-chart-container">
+                    <h3>水位变化</h3>
+                    <ReactECharts
+                      option={{
+                        tooltip: { trigger: 'axis' },
+                        grid: { left: 55, right: 30, top: 45, bottom: 50 },
+                        dataZoom: [{ type: 'inside', start: 0, end: 100 }],
+                        xAxis: {
+                          type: 'category',
+                          name: '时间',
+                          axisLabel: {
+                            rotate: historyRange === '168h' ? 35 : 0,
+                            formatter: (val) => {
+                              const d = new Date(val)
+                              return historyRange === '168h'
+                                ? `${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getDate().toString().padStart(2, '0')} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
+                                : `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
+                            },
+                          },
+                          data: analysisData.history.data.map(d => d.timestamp),
+                        },
+                        yAxis: { type: 'value', name: '水位（m）', axisLabel: { formatter: '{value} m' } },
+                        series: [{
+                          name: '水位',
+                          type: 'line',
+                          data: analysisData.history.data.map(d => d.water_level),
+                          smooth: true,
+                          symbolSize: 6,
+                          lineStyle: { color: '#0b5d74', width: 2 },
+                          itemStyle: { color: '#0b5d74' },
+                          areaStyle: { color: 'rgba(11, 93, 116, 0.08)' },
+                          markLine: analysisData.statistics && analysisData.statistics.sufficient
+                            ? {
+                                symbol: 'none',
+                                lineStyle: { color: '#d97706', type: 'dashed' },
+                                label: { formatter: '平均水位' },
+                                data: [{ yAxis: analysisData.statistics.avg_water_level }],
+                              }
+                            : undefined,
+                        }],
+                      }}
+                      style={{ height: '320px' }}
+                    />
+                  </div>
+                  <div className="history-chart-container">
+                    <h3>降雨分布</h3>
+                    <ReactECharts
+                      option={{
+                        tooltip: { trigger: 'axis' },
+                        grid: { left: 55, right: 30, top: 45, bottom: 50 },
+                        dataZoom: [{ type: 'inside', start: 0, end: 100 }],
+                        xAxis: {
+                          type: 'category',
+                          name: '时间',
+                          axisLabel: {
+                            rotate: historyRange === '168h' ? 35 : 0,
+                            formatter: (val) => {
+                              const d = new Date(val)
+                              return historyRange === '168h'
+                                ? `${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getDate().toString().padStart(2, '0')} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
+                                : `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
+                            },
+                          },
+                          data: analysisData.history.data.map(d => d.timestamp),
+                        },
+                        yAxis: { type: 'value', name: '降雨量（mm）', axisLabel: { formatter: '{value} mm' } },
+                        series: [{
+                          name: '降雨量',
+                          type: 'bar',
+                          data: analysisData.history.data.map(d => ({
+                            value: d.rainfall,
+                            itemStyle: {
+                              color: d.rainfall >= 50 ? '#dc2626'
+                                : d.rainfall >= 30 ? '#ea580c'
+                                : d.rainfall >= 15 ? '#d97706'
+                                : d.rainfall >= 5 ? '#2563eb'
+                                : '#94a3b8',
+                            },
+                          })),
+                          barMaxWidth: 20,
+                        }],
+                      }}
+                      style={{ height: '300px' }}
+                    />
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </section>
+
+        {/* ── 第15阶段：多站综合对比 ── */}
+        <section className="comparison-section" aria-label="多站综合对比">
+          <div className="history-header">
+            <h2>多站综合对比</h2>
+            <div className="history-range-toggle">
+              <button
+                type="button"
+                className={comparisonRange === '24h' ? 'active' : ''}
+                onClick={() => setComparisonRange('24h')}
+              >24小时</button>
+              <button
+                type="button"
+                className={comparisonRange === '168h' ? 'active' : ''}
+                onClick={() => setComparisonRange('168h')}
+              >7天</button>
+            </div>
+          </div>
+
+          {comparisonLoading && (
+            <p className="notice loading">正在加载多站对比数据...</p>
+          )}
+
+          {!comparisonLoading && comparisonData && comparisonData.sufficient && (
+            <>
+              <div className="highlight-cards">
+                <button
+                  type="button"
+                  className="highlight-card"
+                  onClick={() => comparisonData.highest_water_level_station && setSelectedStationId(comparisonData.highest_water_level_station.station_id)}
+                >
+                  <span className="highlight-label">当前最高水位</span>
+                  <strong>{comparisonData.highest_water_level_station ? `${comparisonData.highest_water_level_station.current_water_level} m` : '数据不足'}</strong>
+                  <small>{comparisonData.highest_water_level_station ? comparisonData.highest_water_level_station.station_name : '点击切换'}</small>
+                </button>
+                <button
+                  type="button"
+                  className="highlight-card"
+                  onClick={() => comparisonData.fastest_rising_station && setSelectedStationId(comparisonData.fastest_rising_station.station_id)}
+                >
+                  <span className="highlight-label">水位上涨最快</span>
+                  <strong>{comparisonData.fastest_rising_station ? `${comparisonData.fastest_rising_station.rate_per_hour} m/h` : '数据不足'}</strong>
+                  <small>{comparisonData.fastest_rising_station ? comparisonData.fastest_rising_station.station_name : '点击切换'}</small>
+                </button>
+                <button
+                  type="button"
+                  className="highlight-card"
+                  onClick={() => comparisonData.highest_rainfall_station && setSelectedStationId(comparisonData.highest_rainfall_station.station_id)}
+                >
+                  <span className="highlight-label">降雨最高</span>
+                  <strong>{comparisonData.highest_rainfall_station ? `${comparisonData.highest_rainfall_station.total_rainfall} mm` : '数据不足'}</strong>
+                  <small>{comparisonData.highest_rainfall_station ? comparisonData.highest_rainfall_station.station_name : '点击切换'}</small>
+                </button>
+                <button
+                  type="button"
+                  className="highlight-card highlight-risk"
+                  onClick={() => comparisonData.highest_risk_station && setSelectedStationId(comparisonData.highest_risk_station.station_id)}
+                >
+                  <span className="highlight-label">当前风险最高</span>
+                  <strong>{comparisonData.highest_risk_station ? riskLevelLabel(comparisonData.highest_risk_station.risk_level) : '数据不足'}</strong>
+                  <small>{comparisonData.highest_risk_station ? comparisonData.highest_risk_station.station_name : '点击切换'}</small>
+                </button>
+              </div>
+
+              <div className="comparison-charts">
+                <div className="history-chart-container">
+                  <h3>水位对比</h3>
+                  <ReactECharts option={waterCompareOption(comparisonData, comparisonRange)} style={{ height: '340px' }} />
+                </div>
+                <div className="history-chart-container">
+                  <h3>降雨对比</h3>
+                  <ReactECharts option={rainfallCompareOption(comparisonData)} style={{ height: '300px' }} />
+                </div>
+              </div>
+
+              <div className="risk-ranking-block">
+                <h3>站点风险排名</h3>
+                <table className="risk-table">
+                  <thead>
+                    <tr>
+                      <th>排名</th>
+                      <th>站点</th>
+                      <th>当前水位</th>
+                      <th>警戒水位</th>
+                      <th>风险等级</th>
+                      <th>趋势</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {comparisonData.risk_ranking.map((s, index) => (
+                      <tr
+                        key={s.station_id}
+                        onClick={() => setSelectedStationId(s.station_id)}
+                        className={selectedStationId === s.station_id ? 'active-row' : ''}
+                      >
+                        <td>{index + 1}</td>
+                        <td>{s.station_name}</td>
+                        <td>{s.sufficient ? `${s.current_water_level} m` : '历史数据不足'}</td>
+                        <td>{s.warning_level} m</td>
+                        <td>
+                          {s.sufficient ? (
+                            <span className={`risk-badge risk-${s.risk_level}`}>{riskLevelLabel(s.risk_level)}</span>
+                          ) : '—'}
+                        </td>
+                        <td>
+                          {s.sufficient ? (
+                            <span className={`trend-badge trend-badge-${s.water_level_trend}`}>{trendLabel(s.water_level_trend)}</span>
+                          ) : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+
+          {!comparisonLoading && comparisonData && !comparisonData.sufficient && (
+            <p className="notice insufficient">历史数据不足，暂无法进行多站对比分析</p>
+          )}
+        </section>
+
       </section>
     </main>
   )

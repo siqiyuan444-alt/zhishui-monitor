@@ -123,6 +123,12 @@ def init_db():
     else:
         _ensure_all_stations_have_data(conn)
 
+    # 第14阶段：为历史分析提供足够宽的（模拟）历史窗口，幂等且不删除任何数据
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_water_data_station_time ON water_data (station_id, created_at)"
+    )
+    ensure_history_backfill(conn)
+
     _init_users(conn)
     _ensure_admin_user(conn, os.environ.get("ADMIN_PASSWORD", ""))
 
@@ -191,6 +197,61 @@ def _ensure_all_stations_have_data(conn):
     conn.commit()
 
 
+def ensure_history_backfill(conn, days: int = None, interval_minutes: int = 30):
+    """为历史分析补足模拟历史数据（幂等）。
+
+    当某个水文站的历史样本早于目标窗口起点时，向后逐段生成本地模拟数据，
+    使 24 小时 / 7 天范围内的历史趋势分析有数据可查。不删除已有数据。
+    目标天数可通过环境变量 HISTORY_BACKFILL_DAYS 调整（默认 7 天）。
+    """
+    if days is None:
+        try:
+            days = int(os.environ.get("HISTORY_BACKFILL_DAYS", "7"))
+        except (TypeError, ValueError):
+            days = 7
+    days = max(1, min(days, 30))
+
+    cursor = conn.cursor()
+    target_oldest = datetime.now() - timedelta(days=days)
+
+    for station in STATIONS:
+        sid = station["station_id"]
+        sname = station["station_name"]
+        wlevel = station["warning_level"]
+        lo, hi = WATER_RANGES[sid]
+
+        row = cursor.execute(
+            "SELECT MIN(created_at) AS min_ts FROM water_data WHERE station_id = ?", (sid,)
+        ).fetchone()
+        min_ts = row["min_ts"]
+        if not min_ts:
+            continue
+        try:
+            min_dt = datetime.fromisoformat(min_ts)
+        except (ValueError, TypeError):
+            continue
+
+        if min_dt <= target_oldest:
+            continue
+
+        records = []
+        ts = min_dt - timedelta(minutes=interval_minutes)
+        while ts > target_oldest:
+            water_level = round(random.uniform(lo, hi), 2)
+            rainfall = generate_rainfall()
+            status = calculate_status(water_level, wlevel, rainfall)
+            ts_text = ts.isoformat(timespec="seconds")
+            records.append((sid, sname, water_level, wlevel, rainfall, status, ts_text, "mock", "valid", ts_text))
+            ts -= timedelta(minutes=interval_minutes)
+
+        if records:
+            cursor.executemany(
+                "INSERT INTO water_data (station_id, station_name, water_level, warning_level, rainfall, status, created_at, source, data_quality, collected_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                records,
+            )
+    conn.commit()
+
+
 def get_stations() -> list:
     conn = get_connection()
     cursor = conn.cursor()
@@ -238,6 +299,77 @@ def get_water_history(station_id: str = "ST001", limit: int = 20) -> list:
     rows = cursor.fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def get_history_since(station_id: str, since_iso: str, limit: int = None) -> list:
+    """返回某个水文站指定时间段之后的所有历史记录（时间正序）。"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    sql = (
+        "SELECT id, station_id, station_name, water_level, warning_level, rainfall, status, created_at, source, data_quality "
+        "FROM water_data WHERE station_id = ? AND created_at >= ? ORDER BY created_at ASC"
+    )
+    params = [station_id, since_iso]
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
+    cursor.execute(sql, params)
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_station_stats(station_id: str, since_iso: str) -> dict:
+    """统计指定时间段内某站的水位/降雨聚合值。"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    row = cursor.execute(
+        "SELECT COUNT(*) AS n, "
+        "MAX(water_level) AS mx, MIN(water_level) AS mn, AVG(water_level) AS av, "
+        "MAX(rainfall) AS mxr, AVG(rainfall) AS avr, COALESCE(SUM(rainfall), 0) AS tot "
+        "FROM water_data WHERE station_id = ? AND created_at >= ?",
+        (station_id, since_iso),
+    ).fetchone()
+    conn.close()
+    return dict(row)
+
+
+def count_warnings_since(station_id: str, since_iso: str) -> int:
+    conn = get_connection()
+    cursor = conn.cursor()
+    row = cursor.execute(
+        "SELECT COUNT(*) AS n FROM warning_records WHERE station_id = ? AND created_at >= ?",
+        (station_id, since_iso),
+    ).fetchone()
+    conn.close()
+    return row["n"]
+
+
+def get_all_history_since(since_iso: str) -> list:
+    """返回指定时间段之后所有水文站的历史记录（时间正序，含站名等）。"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT station_id, station_name, water_level, warning_level, rainfall, created_at "
+        "FROM water_data WHERE created_at >= ? ORDER BY created_at ASC",
+        (since_iso,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def count_all_warnings_since(since_iso: str) -> dict:
+    """返回指定时间段之后各站预警数量 {station_id: count}。"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT station_id, COUNT(*) AS n FROM warning_records WHERE created_at >= ? GROUP BY station_id",
+        (since_iso,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return {row["station_id"]: row["n"] for row in rows}
 
 
 def get_all_latest_water_data() -> list:

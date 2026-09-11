@@ -1274,3 +1274,448 @@ button:disabled {
     padding: 28px 20px;
   }
 }
+
+/* ── 第14阶段：历史分析 ── */
+.history-analysis-section {
+  margin-top: 36px;
+  padding: 28px 32px;
+  background: #ffffff;
+  border-radius: 14px;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.04);
+}
+
+.history-analysis-section h2 {
+  margin: 0;
+  color: #173a46;
+  font-size: 20px;
+}
+
+.history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.history-range-toggle {
+  display: flex;
+  gap: 8px;
+}
+
+.history-range-toggle button {
+  padding: 7px 20px;
+  border-radius: 8px;
+  border: 1px solid #d5e1ea;
+  background: #f4fafc;
+  color: #4a7480;
+  font-weight: 500;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.history-range-toggle button.active {
+  background: #0b5d74;
+  color: #ffffff;
+  border-color: #0b5d74;
+}
+
+.history-range-toggle button:hover:not(.active) {
+  background: #e2eff4;
+}
+
+.history-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.history-stats-grid .stat-card {
+  background: #f4fafc;
+  border: 1px solid #e2eff4;
+  border-radius: 10px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.history-stats-grid .stat-card .stat-label {
+  color: #6a9aa8;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.history-stats-grid .stat-card .stat-value {
+  color: #173a46;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.trend-analysis-card {
+  background: #f4fafc;
+  border-left: 4px solid #0b5d74;
+  border-radius: 10px;
+  padding: 18px 22px;
+  margin-bottom: 20px;
+}
+
+.trend-analysis-card.trend-rising {
+  border-left-color: #dc2626;
+  background: #fef2f2;
+}
+
+.trend-analysis-card.trend-falling {
+  border-left-color: #2563eb;
+  background: #eff6ff;
+}
+
+.trend-badge-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.trend-badge {
+  display: inline-block;
+  padding: 3px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.trend-badge-rising {
+  background: #dc2626;
+  color: #ffffff;
+}
+
+.trend-badge-falling {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.trend-badge-stable {
+  background: #0b5d74;
+  color: #ffffff;
+}
+
+.trend-change {
+  color: #4a7480;
+  font-size: 13px;
+}
+
+.trend-desc {
+  margin: 6px 0 0;
+  color: #4a7480;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.forecast-card {
+  background: #ffffff;
+  border: 1px solid #e2eff4;
+  border-radius: 10px;
+  padding: 22px 24px;
+  margin-bottom: 20px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.03);
+}
+
+.forecast-card h3 {
+  margin: 0 0 16px;
+  color: #173a46;
+  font-size: 16px;
+}
+
+.forecast-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.forecast-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.forecast-item .stat-label {
+  color: #6a9aa8;
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.forecast-item .stat-value {
+  color: #173a46;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.risk-badge {
+  display: inline-block;
+  padding: 3px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  align-self: flex-start;
+}
+
+.risk-normal {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.risk-attention {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.risk-warning {
+  background: #ffedd5;
+  color: #9a3412;
+}
+
+.risk-danger {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.forecast-note {
+  margin: 0;
+  color: #6a9aa8;
+  font-size: 12px;
+  font-style: italic;
+}
+
+.history-charts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-top: 24px;
+}
+
+.history-chart-container {
+  background: #f4fafc;
+  border-radius: 10px;
+  padding: 18px 20px;
+}
+
+.history-chart-container h3 {
+  margin: 0 0 10px;
+  color: #173a46;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.notice.insufficient {
+  text-align: center;
+  color: #6a9aa8;
+  font-style: italic;
+  padding: 18px;
+  background: #f4fafc;
+  border-radius: 8px;
+  margin-bottom: 20px;
+}
+
+.notice.loading {
+  text-align: center;
+  color: #4a7480;
+  padding: 28px;
+  font-style: italic;
+}
+
+@media (max-width: 900px) {
+  .history-analysis-section {
+    padding: 22px 18px;
+  }
+
+  .history-stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .history-charts {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 600px) {
+  .history-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .history-stats-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── 第15阶段：多站综合对比 ── */
+.comparison-section {
+  margin-top: 36px;
+  padding: 28px 32px;
+  background: #ffffff;
+  border-radius: 14px;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.04);
+}
+
+.comparison-section h2 {
+  margin: 0;
+  color: #173a46;
+  font-size: 20px;
+}
+
+.highlight-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.highlight-card {
+  background: #f4fafc;
+  border: 1px solid #e2eff4;
+  border-radius: 10px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.highlight-card:hover {
+  border-color: #0b5d74;
+  box-shadow: 0 2px 8px rgba(11, 93, 116, 0.12);
+  transform: translateY(-1px);
+}
+
+.highlight-label {
+  color: #6a9aa8;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.highlight-card strong {
+  color: #173a46;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.highlight-card small {
+  color: #4a7480;
+  font-size: 13px;
+}
+
+.highlight-risk {
+  border-color: #fecaca;
+}
+
+.comparison-charts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+.risk-ranking-block {
+  background: #ffffff;
+  border: 1px solid #e2eff4;
+  border-radius: 10px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.03);
+}
+
+.risk-ranking-block h3 {
+  margin: 0;
+  padding: 18px 22px;
+  border-bottom: 1px solid #e2eff4;
+  color: #173a46;
+  font-size: 16px;
+}
+
+.risk-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.risk-table th,
+.risk-table td {
+  padding: 12px 16px;
+  text-align: left;
+  border-bottom: 1px solid #edf2f6;
+}
+
+.risk-table th {
+  color: #6a9aa8;
+  font-weight: 500;
+  font-size: 12px;
+  letter-spacing: 0.3px;
+  background: #f8fbfc;
+  text-transform: uppercase;
+}
+
+.risk-table tbody tr {
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.risk-table tbody tr:hover {
+  background: #f4fafc;
+}
+
+.risk-table tbody tr.active-row {
+  background: #e2eff4;
+}
+
+.risk-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+@media (max-width: 900px) {
+  .comparison-section {
+    padding: 22px 18px;
+  }
+
+  .highlight-cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .comparison-charts {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 600px) {
+  .highlight-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .risk-table {
+    display: block;
+  }
+
+  .risk-table tbody {
+    display: block;
+  }
+
+  .risk-table tbody tr {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    padding: 10px 12px;
+  }
+
+  .risk-table td {
+    border-bottom: none;
+    padding: 2px 0;
+  }
+}

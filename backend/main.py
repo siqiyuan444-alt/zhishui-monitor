@@ -15,6 +15,9 @@ from database import (
     get_station_by_id,
     insert_water_data,
     get_water_history,
+    get_history_since,
+    get_station_stats,
+    count_warnings_since,
     get_all_latest_water_data,
     get_rainfall_summary,
     calculate_status,
@@ -25,6 +28,8 @@ from database import (
     get_warnings_summary,
     handle_warning,
     get_latest_warning,
+    get_all_history_since,
+    count_all_warnings_since,
     WATER_RANGES,
     get_user_by_username,
     get_user_by_id,
@@ -32,6 +37,12 @@ from database import (
     create_user,
     delete_user,
     update_user_role,
+)
+from services.data_analysis import (
+    analyze_trend,
+    forecast,
+    build_comparison,
+    DEFAULT_FORECAST_HORIZON,
 )
 
 JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "dev-secret-key-change-in-production")
@@ -320,6 +331,156 @@ def handle_warning_endpoint(warning_id: int):
     if not success:
         raise HTTPException(status_code=404, detail=f"预警记录 {warning_id} 不存在")
     return {"success": True}
+
+
+# ──────────────────────────── 第14阶段：历史数据分析与趋势预测 ────────────────────────────
+
+HOURS_MIN = 1
+HOURS_MAX = 720
+
+
+def _since_cutoff(hours: int):
+    return (datetime.now() - timedelta(hours=hours)).isoformat(timespec="seconds")
+
+
+def _get_station_or_404(station_id: str):
+    station = get_station_by_id(station_id)
+    if not station:
+        raise HTTPException(status_code=404, detail=f"水文站 {station_id} 不存在")
+    return station
+
+
+@app.get("/api/history")
+def history_api(
+    station_id: str = Query(default="ST001"),
+    hours: int = Query(default=24, ge=HOURS_MIN, le=HOURS_MAX),
+):
+    station = _get_station_or_404(station_id)
+    since = _since_cutoff(hours)
+    rows = get_history_since(station_id=station_id, since_iso=since)
+
+    records = [
+        {
+            "timestamp": r["created_at"],
+            "water_level": r["water_level"],
+            "warning_level": r["warning_level"],
+            "rainfall": r["rainfall"],
+            "status": r["status"],
+            "source": r["source"] or "mock",
+            "data_quality": r["data_quality"] or "valid",
+        }
+        for r in rows
+    ]
+
+    return {
+        "station_id": station_id,
+        "station_name": station["station_name"],
+        "hours": hours,
+        "count": len(records),
+        "data": records,
+    }
+
+
+@app.get("/api/trend")
+def trend_api(
+    station_id: str = Query(default="ST001"),
+    hours: int = Query(default=24, ge=HOURS_MIN, le=HOURS_MAX),
+):
+    station = _get_station_or_404(station_id)
+    since = _since_cutoff(hours)
+    rows = get_history_since(station_id=station_id, since_iso=since)
+
+    result = analyze_trend(rows, hours=hours)
+    return {
+        "station_id": station_id,
+        "station_name": station["station_name"],
+        "hours": hours,
+        **result,
+    }
+
+
+@app.get("/api/statistics")
+def statistics_api(
+    station_id: str = Query(default="ST001"),
+    hours: int = Query(default=24, ge=HOURS_MIN, le=HOURS_MAX),
+):
+    station = _get_station_or_404(station_id)
+    since = _since_cutoff(hours)
+    st = get_station_stats(station_id=station_id, since_iso=since)
+    warning_count = count_warnings_since(station_id=station_id, since_iso=since)
+
+    n = st["n"]
+    data_points = int(n)
+    if n <= 0:
+        stats = {
+            "max_water_level": None,
+            "min_water_level": None,
+            "avg_water_level": None,
+            "max_rainfall": None,
+            "avg_rainfall": None,
+            "total_rainfall": 0.0,
+            "warning_count": warning_count,
+            "data_points": data_points,
+        }
+    else:
+        stats = {
+            "max_water_level": round(st["mx"], 2),
+            "min_water_level": round(st["mn"], 2),
+            "avg_water_level": round(st["av"], 2),
+            "max_rainfall": round(st["mxr"], 1),
+            "avg_rainfall": round(st["avr"], 2),
+            "total_rainfall": round(st["tot"], 1),
+            "warning_count": warning_count,
+            "data_points": data_points,
+        }
+
+    return {
+        "station_id": station_id,
+        "station_name": station["station_name"],
+        "hours": hours,
+        "sufficient": data_points >= 1,
+        "message": "" if data_points >= 1 else "历史数据不足",
+        **stats,
+    }
+
+
+@app.get("/api/forecast")
+def forecast_api(
+    station_id: str = Query(default="ST001"),
+    hours: int = Query(default=24, ge=HOURS_MIN, le=HOURS_MAX),
+    horizon_hours: int = Query(default=DEFAULT_FORECAST_HORIZON, ge=1, le=72),
+):
+    station = _get_station_or_404(station_id)
+    since = _since_cutoff(hours)
+    rows = get_history_since(station_id=station_id, since_iso=since)
+
+    result = forecast(rows, warning_level=station["warning_level"], hours=hours,
+                      horizon_hours=horizon_hours)
+    return {
+        "station_id": station_id,
+        "station_name": station["station_name"],
+        "hours": hours,
+        **result,
+    }
+
+
+# ──────────────────────────── 第15阶段：多站综合对比分析 ────────────────────────────
+
+@app.get("/api/comparison")
+def comparison_api(
+    hours: int = Query(default=24, ge=HOURS_MIN, le=HOURS_MAX),
+):
+    stations = get_stations()
+    since = _since_cutoff(hours)
+    all_history = get_all_history_since(since)
+    warning_counts = count_all_warnings_since(since)
+
+    result = build_comparison(stations, all_history, warning_counts, hours=hours)
+    return {
+        "hours": hours,
+        "count": result["station_count"],
+        **result,
+    }
 
 
 if os.path.isdir(_dist_dir):
