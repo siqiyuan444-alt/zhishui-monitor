@@ -641,6 +641,13 @@ function MonitorApp({ user, onLogout }) {
   const [comparisonData, setComparisonData] = useState(null)
   const [comparisonLoading, setComparisonLoading] = useState(false)
 
+  // ── 第16阶段：数据报表状态 ──
+  const [reportRange, setReportRange] = useState('24h')
+  const [reportStation, setReportStation] = useState('')
+  const [reportData, setReportData] = useState(null)
+  const [reportStats, setReportStats] = useState(null)
+  const [reportLoading, setReportLoading] = useState(false)
+
   const loadStations = useCallback(async () => {
     try {
       const response = await fetch(`${API_BASE}/api/stations`)
@@ -845,6 +852,27 @@ function MonitorApp({ user, onLogout }) {
     }
   }, [])
 
+  const loadReport = useCallback(async (stationId, hours) => {
+    setReportLoading(true)
+    setReportData(null)
+    setReportStats(null)
+    try {
+      const params = new URLSearchParams({ hours: String(hours) })
+      if (stationId) params.set('station_id', stationId)
+      const [dataRes, statsRes] = await Promise.allSettled([
+        fetch(`${API_BASE}/api/report?${params}`).then(r => r.json()),
+        fetch(`${API_BASE}/api/report/statistics?${params}`).then(r => r.json()),
+      ])
+      setReportData(dataRes.status === 'fulfilled' ? dataRes.value : null)
+      setReportStats(statsRes.status === 'fulfilled' ? statsRes.value : null)
+    } catch {
+      setReportData(null)
+      setReportStats(null)
+    } finally {
+      setReportLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     loadStations()
   }, [loadStations])
@@ -876,8 +904,22 @@ function MonitorApp({ user, onLogout }) {
     loadComparison(hours)
   }, [comparisonRange, loadComparison])
 
+  useEffect(() => {
+    const hoursMap = { '24h': 24, '7d': 168, '30d': 720 }
+    const hours = hoursMap[reportRange] || 24
+    loadReport(reportStation, hours)
+  }, [reportRange, reportStation, loadReport])
+
   const handleStationChange = (e) => {
     setSelectedStationId(e.target.value)
+  }
+
+  const downloadReport = (format) => {
+    const hoursMap = { '24h': 24, '7d': 168, '30d': 720 }
+    const hours = hoursMap[reportRange] || 24
+    const params = new URLSearchParams({ hours: String(hours) })
+    if (reportStation) params.set('station_id', reportStation)
+    window.open(`${API_BASE}/api/report/export/${format}?${params}`, '_blank')
   }
 
   const status = waterData ? waterData.status : '正常'
@@ -1566,6 +1608,128 @@ function MonitorApp({ user, onLogout }) {
 
           {!comparisonLoading && comparisonData && !comparisonData.sufficient && (
             <p className="notice insufficient">历史数据不足，暂无法进行多站对比分析</p>
+          )}
+        </section>
+
+        {/* ── 第16阶段：数据报表 ── */}
+        <section className="report-section" aria-label="数据报表">
+          <div className="report-header">
+            <h2>数据报表</h2>
+            <div className="report-actions">
+              <div className="report-range-toggle">
+                <button
+                  type="button"
+                  className={reportRange === '24h' ? 'active' : ''}
+                  onClick={() => setReportRange('24h')}
+                >24小时</button>
+                <button
+                  type="button"
+                  className={reportRange === '7d' ? 'active' : ''}
+                  onClick={() => setReportRange('7d')}
+                >7天</button>
+                <button
+                  type="button"
+                  className={reportRange === '30d' ? 'active' : ''}
+                  onClick={() => setReportRange('30d')}
+                >30天</button>
+              </div>
+              <select
+                className="report-station-select"
+                value={reportStation}
+                onChange={(e) => setReportStation(e.target.value)}
+              >
+                <option value="">全部站点</option>
+                {stations.map((s) => (
+                  <option key={s.station_id} value={s.station_id}>
+                    {s.station_name}
+                  </option>
+                ))}
+              </select>
+              <div className="report-export-buttons">
+                <button type="button" className="report-export-btn" onClick={() => downloadReport('csv')}>
+                  导出 CSV
+                </button>
+                <button type="button" className="report-export-btn" onClick={() => downloadReport('excel')}>
+                  导出 Excel
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {reportLoading && (
+            <p className="notice loading">正在加载报表数据...</p>
+          )}
+
+          {!reportLoading && reportStats && (
+            <div className="report-stats-grid">
+              <div className="stat-card">
+                <span className="stat-label">平均水位</span>
+                <span className="stat-value">{reportStats.avg_water_level !== null && reportStats.avg_water_level !== undefined ? `${reportStats.avg_water_level} m` : '—'}</span>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">最高水位</span>
+                <span className="stat-value">{reportStats.max_water_level !== null && reportStats.max_water_level !== undefined ? `${reportStats.max_water_level} m` : '—'}</span>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">最低水位</span>
+                <span className="stat-value">{reportStats.min_water_level !== null && reportStats.min_water_level !== undefined ? `${reportStats.min_water_level} m` : '—'}</span>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">平均降雨量</span>
+                <span className="stat-value">{reportStats.avg_rainfall !== null && reportStats.avg_rainfall !== undefined ? `${reportStats.avg_rainfall} mm` : '—'}</span>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">最大降雨量</span>
+                <span className="stat-value">{reportStats.max_rainfall !== null && reportStats.max_rainfall !== undefined ? `${reportStats.max_rainfall} mm` : '—'}</span>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">预警次数</span>
+                <span className="stat-value">{reportStats.warning_count} 次</span>
+              </div>
+            </div>
+          )}
+
+          {!reportLoading && !reportStats && (
+            <p className="notice error">报表数据加载失败，请稍后重试。</p>
+          )}
+
+          {!reportLoading && reportData && (
+            <div className="report-table-wrapper">
+              {reportData.data && reportData.data.length > 0 ? (
+                <table className="report-table">
+                  <thead>
+                    <tr>
+                      <th>站点</th>
+                      <th>采集时间</th>
+                      <th>水位</th>
+                      <th>警戒水位</th>
+                      <th>降雨量</th>
+                      <th>状态</th>
+                      <th>数据来源</th>
+                      <th>数据质量</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reportData.data.map((r, index) => (
+                      <tr key={`${r.station_id}-${r.timestamp}-${index}`}>
+                        <td>{r.station_name}</td>
+                        <td>{new Date(r.timestamp).toLocaleString('zh-CN')}</td>
+                        <td>{r.water_level} m</td>
+                        <td>{r.warning_level} m</td>
+                        <td>{r.rainfall} mm</td>
+                        <td>
+                          <span className={`status-badge ${getStatusClass(r.status)}`}>{r.status}</span>
+                        </td>
+                        <td>{r.source}</td>
+                        <td>{r.data_quality}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <p className="notice insufficient">当前时间范围内暂无报表数据</p>
+              )}
+            </div>
           )}
         </section>
 

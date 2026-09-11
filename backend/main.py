@@ -1,3 +1,5 @@
+import csv
+import io
 import os
 import random
 from datetime import datetime, timedelta
@@ -6,7 +8,7 @@ import jwt
 from fastapi import FastAPI, Query, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from passlib.hash import argon2
 from pydantic import BaseModel
 
@@ -30,6 +32,8 @@ from database import (
     get_latest_warning,
     get_all_history_since,
     count_all_warnings_since,
+    get_report_data,
+    get_report_stats,
     WATER_RANGES,
     get_user_by_username,
     get_user_by_id,
@@ -481,6 +485,180 @@ def comparison_api(
         "count": result["station_count"],
         **result,
     }
+
+
+# ──────────────────────────── 第16阶段：数据报表导出 ────────────────────────────
+
+@app.get("/api/report")
+def report_data_api(
+    station_id: str = Query(default=None),
+    hours: int = Query(default=24, ge=HOURS_MIN, le=HOURS_MAX),
+    limit: int = Query(default=None, ge=1, le=10000),
+):
+    if station_id and not get_station_by_id(station_id):
+        raise HTTPException(status_code=404, detail=f"水文站 {station_id} 不存在")
+    since = _since_cutoff(hours)
+    records = get_report_data(station_id=station_id, since_iso=since, limit=limit)
+    station_name = None
+    if station_id:
+        s = get_station_by_id(station_id)
+        station_name = s["station_name"] if s else station_id
+    return {
+        "station_id": station_id,
+        "station_name": station_name,
+        "hours": hours,
+        "count": len(records),
+        "data": records,
+    }
+
+
+@app.get("/api/report/statistics")
+def report_statistics_api(
+    station_id: str = Query(default=None),
+    hours: int = Query(default=24, ge=HOURS_MIN, le=HOURS_MAX),
+):
+    if station_id and not get_station_by_id(station_id):
+        raise HTTPException(status_code=404, detail=f"水文站 {station_id} 不存在")
+    since = _since_cutoff(hours)
+    st = get_report_stats(station_id=station_id, since_iso=since)
+    n = st["n"]
+    data_points = int(n)
+    if data_points <= 0:
+        return {
+            "station_id": station_id,
+            "station_name": (get_station_by_id(station_id) or {}).get("station_name", station_id) if station_id else None,
+            "hours": hours,
+            "data_points": 0,
+            "avg_water_level": None,
+            "max_water_level": None,
+            "min_water_level": None,
+            "avg_rainfall": None,
+            "max_rainfall": None,
+            "warning_count": st["warning_count"],
+        }
+    return {
+        "station_id": station_id,
+        "station_name": (get_station_by_id(station_id) or {}).get("station_name", station_id) if station_id else None,
+        "hours": hours,
+        "data_points": data_points,
+        "avg_water_level": round(st["av"], 2),
+        "max_water_level": round(st["mx"], 2),
+        "min_water_level": round(st["mn"], 2),
+        "avg_rainfall": round(st["avr"], 2),
+        "max_rainfall": round(st["mxr"], 1),
+        "warning_count": st["warning_count"],
+    }
+
+
+@app.get("/api/report/export/csv")
+def report_export_csv(
+    station_id: str = Query(default=None),
+    hours: int = Query(default=24, ge=HOURS_MIN, le=HOURS_MAX),
+):
+    if station_id and not get_station_by_id(station_id):
+        raise HTTPException(status_code=404, detail=f"水文站 {station_id} 不存在")
+    since = _since_cutoff(hours)
+    records = get_report_data(station_id=station_id, since_iso=since)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["站点编号", "站点名称", "采集时间", "当前水位", "警戒水位", "降雨量", "状态", "数据来源", "数据质量"])
+    for r in records:
+        writer.writerow([
+            r["station_id"], r["station_name"], r["timestamp"],
+            r["water_level"], r["warning_level"], r["rainfall"],
+            r["status"], r["source"], r["data_quality"],
+        ])
+
+    csv_bytes = ("\ufeff" + output.getvalue()).encode("utf-8")
+    now_str = datetime.now().strftime("%Y-%m-%d")
+    filename = f"zhishui_water_report_{now_str}.csv"
+    return Response(
+        content=csv_bytes,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/report/export/excel")
+def report_export_excel(
+    station_id: str = Query(default=None),
+    hours: int = Query(default=24, ge=HOURS_MIN, le=HOURS_MAX),
+):
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    if station_id and not get_station_by_id(station_id):
+        raise HTTPException(status_code=404, detail=f"水文站 {station_id} 不存在")
+    since = _since_cutoff(hours)
+    records = get_report_data(station_id=station_id, since_iso=since)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "水情报表"
+
+    # Title row
+    ws.merge_cells("A1:I1")
+    ws["A1"] = "智慧水利 · 水情数据报表"
+    ws["A1"].font = Font(size=16, bold=True)
+    ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+
+    # Info row
+    station_name = (get_station_by_id(station_id) or {}).get("station_name", station_id) if station_id else "全部站点"
+    ws.merge_cells("A2:I2")
+    ws["A2"] = f"时间范围：最近 {hours} 小时  |  站点范围：{station_name}  |  生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    ws["A2"].font = Font(size=10, color="666666")
+    ws["A2"].alignment = Alignment(horizontal="left")
+
+    # Header row
+    headers = ["站点编号", "站点名称", "采集时间", "当前水位", "警戒水位", "降雨量", "状态", "数据来源", "数据质量"]
+    header_font = Font(bold=True, size=11)
+    header_fill = PatternFill(start_color="E2EFF4", end_color="E2EFF4", fill_type="solid")
+    header_align = Alignment(horizontal="center", vertical="center")
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=3, column=col, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_align
+
+    # Data rows
+    for i, r in enumerate(records, 4):
+        ws.cell(row=i, column=1, value=r["station_id"])
+        ws.cell(row=i, column=2, value=r["station_name"])
+        ws.cell(row=i, column=3, value=r["timestamp"])
+        ws.cell(row=i, column=4, value=r["water_level"])
+        ws.cell(row=i, column=5, value=r["warning_level"])
+        ws.cell(row=i, column=6, value=r["rainfall"])
+        ws.cell(row=i, column=7, value=r["status"])
+        ws.cell(row=i, column=8, value=r["source"])
+        ws.cell(row=i, column=9, value=r["data_quality"])
+
+    # Auto-adjust column widths
+    for col_idx, h in enumerate(headers, 1):
+        max_length = len(h) * 2
+        for row in ws.iter_rows(min_col=col_idx, max_col=col_idx, min_row=4, max_row=3 + len(records)):
+            for cell in row:
+                if cell.value is not None:
+                    cell_str = str(cell.value)
+                    cjk = sum(1 for c in cell_str if "\u4e00" <= c <= "\u9fff")
+                    max_length = max(max_length, len(cell_str) + cjk)
+        ws.column_dimensions[get_column_letter(col_idx)].width = min(max_length + 4, 40)
+
+    # Freeze header
+    ws.freeze_panes = "A4"
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+
+    now_str = datetime.now().strftime("%Y-%m-%d")
+    filename = f"zhishui_water_report_{now_str}.xlsx"
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 if os.path.isdir(_dist_dir):

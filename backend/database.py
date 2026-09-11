@@ -556,6 +556,72 @@ def get_latest_warning(station_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+# ──────────────────────────── 第16阶段：数据报表导出 ────────────────────────────
+
+
+def get_report_data(station_id: str = None, since_iso: str = None, limit: int = None) -> list:
+    """返回报表所需记录（时间倒序）。station_id 为 None 时返回全部站点。"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    sql = (
+        "SELECT station_id, station_name, created_at AS timestamp, "
+        "water_level, warning_level, rainfall, status, source, data_quality, "
+        "COALESCE(NULLIF(collected_at, ''), created_at) AS collected_at "
+        "FROM water_data WHERE 1=1"
+    )
+    params: list = []
+    if station_id:
+        sql += " AND station_id = ?"
+        params.append(station_id)
+    if since_iso:
+        sql += " AND created_at >= ?"
+        params.append(since_iso)
+    sql += " ORDER BY created_at DESC"
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
+    cursor.execute(sql, params)
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_report_stats(station_id: str = None, since_iso: str = None) -> dict:
+    """返回报表统计。station_id 为 None 时统计全部站点。"""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    sql = (
+        "SELECT COUNT(*) AS n, "
+        "MAX(water_level) AS mx, MIN(water_level) AS mn, AVG(water_level) AS av, "
+        "MAX(rainfall) AS mxr, AVG(rainfall) AS avr, COALESCE(SUM(rainfall), 0) AS tot "
+        "FROM water_data WHERE 1=1"
+    )
+    params: list = []
+    if station_id:
+        sql += " AND station_id = ?"
+        params.append(station_id)
+    if since_iso:
+        sql += " AND created_at >= ?"
+        params.append(since_iso)
+    row = cursor.execute(sql, params).fetchone()
+
+    ws_sql = "SELECT COUNT(*) AS n FROM warning_records WHERE 1=1"
+    ws_params: list = []
+    if station_id:
+        ws_sql += " AND station_id = ?"
+        ws_params.append(station_id)
+    if since_iso:
+        ws_sql += " AND created_at >= ?"
+        ws_params.append(since_iso)
+    ws_row = cursor.execute(ws_sql, ws_params).fetchone()
+
+    conn.close()
+    result = dict(row)
+    result["warning_count"] = ws_row["n"]
+    return result
+
+
 # ──────────────────────────── 第13阶段：数据质量统计 / 采集日志 ────────────────────────────
 
 

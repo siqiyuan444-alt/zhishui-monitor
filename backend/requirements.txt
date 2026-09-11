@@ -3,3 +3,4 @@ uvicorn
 python-multipart
 PyJWT
 passlib[argon2]
+openpyxl>=3.1,<4
