@@ -795,6 +795,18 @@ function MonitorApp({ user, token, onLogout }) {
     }
   }, [])
 
+  const loadAlertSummary = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/alerts/summary`)
+      if (response.ok) {
+        const result = await response.json()
+        setAlertSummary(result)
+      }
+    } catch {
+      // ignore
+    }
+  }, [])
+
   const loadWaterData = useCallback(async (stationId) => {
     setIsLoading(true)
     setErrorMessage('')
@@ -897,18 +909,6 @@ function MonitorApp({ user, token, onLogout }) {
       setReportStats(null)
     } finally {
       setReportLoading(false)
-    }
-  }, [])
-
-  const loadAlertSummary = useCallback(async () => {
-    try {
-      const response = await fetch(`${API_BASE}/api/alerts/summary`)
-      if (response.ok) {
-        const result = await response.json()
-        setAlertSummary(result)
-      }
-    } catch {
-      // ignore
     }
   }, [])
 
