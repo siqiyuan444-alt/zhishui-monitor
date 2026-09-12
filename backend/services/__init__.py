@@ -12,6 +12,10 @@ from .data_analysis import (
     risk_level_for,
     DEFAULT_FORECAST_HORIZON,
 )
+from .alert_service import (
+    evaluate_alert,
+    create_alert_if_needed,
+)
 
 __all__ = [
     "STATIONS",
@@ -24,4 +28,6 @@ __all__ = [
     "forecast",
     "risk_level_for",
     "DEFAULT_FORECAST_HORIZON",
+    "evaluate_alert",
+    "create_alert_if_needed",
 ]

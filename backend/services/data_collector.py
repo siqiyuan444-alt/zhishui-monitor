@@ -13,6 +13,7 @@ from datetime import datetime
 
 from .mock_water_provider import MockWaterProvider
 from .water_data_provider import get_provider, ProviderError, WaterDataProvider
+from .alert_service import create_alert_if_needed
 
 logger = logging.getLogger("water_collector")
 
@@ -49,7 +50,7 @@ class DataCollector:
 
     def collect_all(self) -> dict:
         """执行一次完整采集流程，返回采集报告。"""
-        from database import create_warning, insert_water_data, log_collection
+        from database import insert_water_data, log_collection
 
         primary = self.provider
         effective_provider = primary
@@ -117,7 +118,7 @@ class DataCollector:
             persisted.append(rec)
 
             if rec["status"] != "正常":
-                create_warning(
+                create_alert_if_needed(
                     station_id=rec["station_id"],
                     station_name=rec["station_name"],
                     water_level=rec["water_level"],

@@ -24,7 +24,6 @@ from database import (
     get_rainfall_summary,
     calculate_status,
     generate_rainfall,
-    create_warning,
     get_warnings,
     get_active_warnings,
     get_warnings_summary,
@@ -41,6 +40,11 @@ from database import (
     create_user,
     delete_user,
     update_user_role,
+    get_alerts,
+    count_alerts,
+    get_alert_summary,
+    acknowledge_alert,
+    resolve_alert,
 )
 from services.data_analysis import (
     analyze_trend,
@@ -48,6 +52,7 @@ from services.data_analysis import (
     build_comparison,
     DEFAULT_FORECAST_HORIZON,
 )
+from services.alert_service import create_alert_if_needed
 
 JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "dev-secret-key-change-in-production")
 JWT_ALGORITHM = "HS256"
@@ -272,7 +277,7 @@ def get_water_data(station_id: str = Query(default="ST001")):
     )
 
     if status != "正常":
-        create_warning(
+        create_alert_if_needed(
             station_id=station_id,
             station_name=station["station_name"],
             water_level=water_level,
@@ -659,6 +664,61 @@ def report_export_excel(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# ──────────────────────────── 第17阶段：智能预警中心 ────────────────────────────
+
+ALERT_LEVELS = ("normal", "attention", "warning", "danger")
+ALERT_STATUSES = ("pending", "acknowledged", "resolved")
+
+
+@app.get("/api/alerts")
+def alerts_api(
+    station_id: str = Query(default=None),
+    level: str = Query(default=None),
+    status: str = Query(default=None),
+    hours: int = Query(default=24, ge=HOURS_MIN, le=HOURS_MAX),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    if station_id and not get_station_by_id(station_id):
+        raise HTTPException(status_code=422, detail=f"水文站 {station_id} 不存在")
+    if level and level not in ALERT_LEVELS:
+        raise HTTPException(status_code=422, detail="level 必须是 normal/attention/warning/danger 之一")
+    if status and status not in ALERT_STATUSES:
+        raise HTTPException(status_code=422, detail="status 必须是 pending/acknowledged/resolved 之一")
+    since = _since_cutoff(hours)
+    items = get_alerts(
+        station_id=station_id,
+        alert_level=level,
+        status=status,
+        since_iso=since,
+        limit=limit,
+        offset=offset,
+    )
+    total = count_alerts(station_id=station_id, alert_level=level, status=status, since_iso=since)
+    return {"items": items, "total": total}
+
+
+@app.get("/api/alerts/summary")
+def alerts_summary_api():
+    return get_alert_summary()
+
+
+@app.post("/api/alerts/{alert_id}/acknowledge")
+def alerts_acknowledge(alert_id: int, admin: dict = Depends(require_admin)):
+    success = acknowledge_alert(alert_id, admin["username"])
+    if not success:
+        raise HTTPException(status_code=404, detail=f"预警记录 {alert_id} 不存在")
+    return {"success": True}
+
+
+@app.post("/api/alerts/{alert_id}/resolve")
+def alerts_resolve(alert_id: int, admin: dict = Depends(require_admin)):
+    success = resolve_alert(alert_id, admin["username"])
+    if not success:
+        raise HTTPException(status_code=404, detail=f"预警记录 {alert_id} 不存在")
+    return {"success": True}
 
 
 if os.path.isdir(_dist_dir):

@@ -95,6 +95,39 @@ def init_db():
         )
     """)
 
+    # ── 第17阶段迁移：智能预警中心扩展字段（保留旧数据，不删除已有记录）──
+    warning_columns = [row[1] for row in cursor.execute("PRAGMA table_info(warning_records)").fetchall()]
+    if "alert_level" not in warning_columns:
+        cursor.execute("ALTER TABLE warning_records ADD COLUMN alert_level TEXT NOT NULL DEFAULT 'normal'")
+    if "title" not in warning_columns:
+        cursor.execute("ALTER TABLE warning_records ADD COLUMN title TEXT NOT NULL DEFAULT ''")
+    if "status" not in warning_columns:
+        cursor.execute("ALTER TABLE warning_records ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'")
+    if "acknowledged_at" not in warning_columns:
+        cursor.execute("ALTER TABLE warning_records ADD COLUMN acknowledged_at TEXT NOT NULL DEFAULT ''")
+    if "acknowledged_by" not in warning_columns:
+        cursor.execute("ALTER TABLE warning_records ADD COLUMN acknowledged_by TEXT NOT NULL DEFAULT ''")
+    if "resolved_at" not in warning_columns:
+        cursor.execute("ALTER TABLE warning_records ADD COLUMN resolved_at TEXT NOT NULL DEFAULT ''")
+    if "resolved_by" not in warning_columns:
+        cursor.execute("ALTER TABLE warning_records ADD COLUMN resolved_by TEXT NOT NULL DEFAULT ''")
+    # 一次性回填旧记录：从 legacy warning_type / is_handled 推导预警等级与处理状态
+    cursor.execute(
+        "UPDATE warning_records SET alert_level = CASE warning_type "
+        "WHEN '超警预警' THEN 'danger' "
+        "WHEN '警戒预警' THEN 'warning' "
+        "WHEN '注意预警' THEN 'attention' "
+        "ELSE 'normal' END "
+        "WHERE alert_level = 'normal' AND warning_type != ''"
+    )
+    cursor.execute(
+        "UPDATE warning_records SET status = 'resolved', resolved_at = created_at "
+        "WHERE status = 'pending' AND is_handled = 1"
+    )
+    cursor.execute(
+        "UPDATE warning_records SET title = warning_type WHERE title = '' AND warning_type != ''"
+    )
+
     station_columns = [row[1] for row in cursor.execute("PRAGMA table_info(stations)").fetchall()]
     if "latitude" not in station_columns:
         cursor.execute("ALTER TABLE stations ADD COLUMN latitude REAL NOT NULL DEFAULT 0.0")
@@ -450,6 +483,7 @@ def create_warning(station_id: str, station_name: str, water_level: float, warni
 
     warning_type = WARNING_TYPE_MAP[status]
     warning_message = WARNING_MESSAGE_MAP[status].format(station_name=station_name)
+    alert_level = {"注意": "attention", "警戒": "warning", "超警": "danger"}.get(status, "normal")
 
     conn = get_connection()
     cursor = conn.cursor()
@@ -466,8 +500,8 @@ def create_warning(station_id: str, station_name: str, water_level: float, warni
 
     created_at = datetime.now().isoformat(timespec="seconds")
     cursor.execute(
-        "INSERT INTO warning_records (station_id, station_name, water_level, warning_level, rainfall, warning_type, warning_message, created_at, is_handled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)",
-        (station_id, station_name, water_level, warning_level, rainfall, warning_type, warning_message, created_at),
+        "INSERT INTO warning_records (station_id, station_name, water_level, warning_level, rainfall, warning_type, warning_message, created_at, is_handled, alert_level, title, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 'pending')",
+        (station_id, station_name, water_level, warning_level, rainfall, warning_type, warning_message, created_at, alert_level, warning_type),
     )
     conn.commit()
     row_id = cursor.lastrowid
@@ -538,7 +572,11 @@ def handle_warning(warning_id: int) -> bool:
     if not row:
         conn.close()
         return False
-    cursor.execute("UPDATE warning_records SET is_handled = 1 WHERE id = ?", (warning_id,))
+    resolved_at = datetime.now().isoformat(timespec="seconds")
+    cursor.execute(
+        "UPDATE warning_records SET is_handled = 1, status = 'resolved', resolved_at = ? WHERE id = ?",
+        (resolved_at, warning_id),
+    )
     conn.commit()
     conn.close()
     return True
@@ -554,6 +592,165 @@ def get_latest_warning(station_id: str) -> dict | None:
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+# ──────────────────────────── 第17阶段：智能预警中心 ────────────────────────────
+
+
+def has_active_alert(station_id: str, alert_level: str) -> bool:
+    """同站点同等级是否存在未解除（pending / acknowledged）的预警。"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    row = cursor.execute(
+        "SELECT id FROM warning_records WHERE station_id = ? AND alert_level = ? AND status IN ('pending', 'acknowledged') LIMIT 1",
+        (station_id, alert_level),
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def create_alert(station_id: str, station_name: str, water_level: float,
+                 warning_level_value: float, rainfall: float, alert_level: str,
+                 warning_type: str, title: str, message: str) -> int | None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    created_at = datetime.now().isoformat(timespec="seconds")
+    cursor.execute(
+        "INSERT INTO warning_records (station_id, station_name, water_level, warning_level, rainfall, warning_type, warning_message, created_at, is_handled, alert_level, title, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 'pending')",
+        (station_id, station_name, water_level, warning_level_value, rainfall, warning_type, message, created_at, alert_level, title),
+    )
+    conn.commit()
+    row_id = cursor.lastrowid
+    conn.close()
+    return row_id
+
+
+_ALERT_SELECT = (
+    "SELECT id, station_id, station_name, water_level, warning_level, rainfall, "
+    "warning_type, warning_message, created_at, is_handled, "
+    "alert_level, title, status, acknowledged_at, acknowledged_by, resolved_at, resolved_by "
+    "FROM warning_records WHERE 1=1"
+)
+
+
+def _map_alert_row(row) -> dict:
+    return {
+        "id": row["id"],
+        "station_id": row["station_id"],
+        "station_name": row["station_name"],
+        "warning_level": row["alert_level"],
+        "warning_type": row["warning_type"],
+        "title": row["title"],
+        "message": row["warning_message"],
+        "water_level": row["water_level"],
+        "warning_level_value": row["warning_level"],
+        "rainfall": row["rainfall"],
+        "status": row["status"],
+        "created_at": row["created_at"],
+        "acknowledged_at": row["acknowledged_at"],
+        "acknowledged_by": row["acknowledged_by"],
+        "resolved_at": row["resolved_at"],
+        "resolved_by": row["resolved_by"],
+    }
+
+
+def _alert_query_params(station_id: str = None, alert_level: str = None,
+                        status: str = None, since_iso: str = None) -> tuple:
+    sql = _ALERT_SELECT
+    params: list = []
+    if station_id:
+        sql += " AND station_id = ?"
+        params.append(station_id)
+    if alert_level:
+        sql += " AND alert_level = ?"
+        params.append(alert_level)
+    if status:
+        sql += " AND status = ?"
+        params.append(status)
+    if since_iso:
+        sql += " AND created_at >= ?"
+        params.append(since_iso)
+    return sql, params
+
+
+def get_alerts(station_id: str = None, alert_level: str = None, status: str = None,
+               since_iso: str = None, limit: int = 50, offset: int = 0) -> list:
+    conn = get_connection()
+    cursor = conn.cursor()
+    sql, params = _alert_query_params(station_id, alert_level, status, since_iso)
+    sql += " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?"
+    params += [int(limit), int(offset)]
+    cursor.execute(sql, params)
+    rows = cursor.fetchall()
+    conn.close()
+    return [_map_alert_row(row) for row in rows]
+
+
+def count_alerts(station_id: str = None, alert_level: str = None, status: str = None,
+                 since_iso: str = None) -> int:
+    conn = get_connection()
+    cursor = conn.cursor()
+    sql, params = _alert_query_params(station_id, alert_level, status, since_iso)
+    sql = "SELECT COUNT(*) AS n FROM (" + sql + ")"
+    row = cursor.execute(sql, params).fetchone()
+    conn.close()
+    return row["n"]
+
+
+def get_alert_summary() -> dict:
+    """返回全量预警汇总（总数 / 处理状态 / 等级分布）。"""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    def _count(where: str, params: tuple = ()) -> int:
+        return cursor.execute(f"SELECT COUNT(*) AS n FROM warning_records WHERE {where}", params).fetchone()["n"]
+
+    summary = {
+        "total": _count("1=1"),
+        "pending": _count("status = 'pending'"),
+        "acknowledged": _count("status = 'acknowledged'"),
+        "resolved": _count("status = 'resolved'"),
+        "normal": _count("alert_level = 'normal'"),
+        "attention": _count("alert_level = 'attention'"),
+        "warning": _count("alert_level = 'warning'"),
+        "danger": _count("alert_level = 'danger'"),
+    }
+    conn.close()
+    return summary
+
+
+def acknowledge_alert(alert_id: int, username: str) -> bool:
+    conn = get_connection()
+    cursor = conn.cursor()
+    row = cursor.execute("SELECT id FROM warning_records WHERE id = ?", (alert_id,)).fetchone()
+    if not row:
+        conn.close()
+        return False
+    now = datetime.now().isoformat(timespec="seconds")
+    cursor.execute(
+        "UPDATE warning_records SET status = 'acknowledged', acknowledged_at = ?, acknowledged_by = ? WHERE id = ?",
+        (now, username, alert_id),
+    )
+    conn.commit()
+    conn.close()
+    return True
+
+
+def resolve_alert(alert_id: int, username: str) -> bool:
+    conn = get_connection()
+    cursor = conn.cursor()
+    row = cursor.execute("SELECT id FROM warning_records WHERE id = ?", (alert_id,)).fetchone()
+    if not row:
+        conn.close()
+        return False
+    now = datetime.now().isoformat(timespec="seconds")
+    cursor.execute(
+        "UPDATE warning_records SET status = 'resolved', resolved_at = ?, resolved_by = ?, is_handled = 1 WHERE id = ?",
+        (now, username, alert_id),
+    )
+    conn.commit()
+    conn.close()
+    return True
 
 
 # ──────────────────────────── 第16阶段：数据报表导出 ────────────────────────────

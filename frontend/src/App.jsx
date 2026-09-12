@@ -29,6 +29,22 @@ function getStatusColor(status) {
   return STATUS_COLORS[status] || '#16803c'
 }
 
+// ── 第17阶段：智能预警中心辅助常量 ──
+const ALERT_LEVEL_LABELS = {
+  danger: '危险',
+  warning: '预警',
+  attention: '注意',
+  normal: '正常',
+}
+
+const ALERT_STATUS_LABELS = {
+  pending: '待处理',
+  acknowledged: '已确认',
+  resolved: '已解除',
+}
+
+const ALERT_HOURS_MAP = { '24h': 24, '7d': 168, '30d': 720 }
+
 // ── 第15阶段：多站综合对比辅助函数 ──
 const COMPARE_CHART_COLORS = ['#0b5d74', '#2563eb', '#d97706', '#16a34a', '#9333ea']
 
@@ -615,7 +631,7 @@ function UserManager({ token, onBack }) {
   )
 }
 
-function MonitorApp({ user, onLogout }) {
+function MonitorApp({ user, token, onLogout }) {
   const [stations, setStations] = useState([])
   const [selectedStationId, setSelectedStationId] = useState('ST001')
   const [waterData, setWaterData] = useState(null)
@@ -647,6 +663,16 @@ function MonitorApp({ user, onLogout }) {
   const [reportData, setReportData] = useState(null)
   const [reportStats, setReportStats] = useState(null)
   const [reportLoading, setReportLoading] = useState(false)
+
+  // ── 第17阶段：智能预警中心状态 ──
+  const [alertRange, setAlertRange] = useState('24h')
+  const [alertStation, setAlertStation] = useState('')
+  const [alertLevel, setAlertLevel] = useState('')
+  const [alertStatus, setAlertStatus] = useState('')
+  const [alertItems, setAlertItems] = useState([])
+  const [alertSummary, setAlertSummary] = useState(null)
+  const [alertLoading, setAlertLoading] = useState(false)
+  const [alertExpandedId, setAlertExpandedId] = useState(null)
 
   const loadStations = useCallback(async () => {
     try {
@@ -806,12 +832,13 @@ function MonitorApp({ user, onLogout }) {
       await loadWarnings()
       await loadWarningSummary()
       await loadLatestWarnings()
+      await loadAlertSummary()
     } catch {
       setErrorMessage('无法连接水情监测服务器')
     } finally {
       setIsLoading(false)
     }
-  }, [loadHistoryData, loadOverview, loadRainfallSummary, loadWarnings, loadWarningSummary, loadLatestWarnings])
+  }, [loadHistoryData, loadOverview, loadRainfallSummary, loadWarnings, loadWarningSummary, loadLatestWarnings, loadAlertSummary])
 
   const loadHistoryAnalysis = useCallback(async (stationId, hours) => {
     setAnalysisLoading(true)
@@ -873,6 +900,69 @@ function MonitorApp({ user, onLogout }) {
     }
   }, [])
 
+  const loadAlertSummary = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/alerts/summary`)
+      if (response.ok) {
+        const result = await response.json()
+        setAlertSummary(result)
+      }
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  const loadAlerts = useCallback(async () => {
+    setAlertLoading(true)
+    try {
+      const params = new URLSearchParams({ hours: String(ALERT_HOURS_MAP[alertRange] || 24) })
+      if (alertStation) params.set('station_id', alertStation)
+      if (alertLevel) params.set('level', alertLevel)
+      if (alertStatus) params.set('status', alertStatus)
+      const response = await fetch(`${API_BASE}/api/alerts?${params}`)
+      if (response.ok) {
+        const result = await response.json()
+        setAlertItems(Array.isArray(result.items) ? result.items : [])
+      } else {
+        setAlertItems([])
+      }
+    } catch {
+      setAlertItems([])
+    } finally {
+      setAlertLoading(false)
+    }
+  }, [alertStation, alertLevel, alertStatus, alertRange])
+
+  const handleAlertAcknowledge = useCallback(async (alertId) => {
+    try {
+      const response = await fetch(`${API_BASE}/api/alerts/${alertId}/acknowledge`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (response.ok) {
+        await loadAlerts()
+        await loadAlertSummary()
+      }
+    } catch {
+      // ignore
+    }
+  }, [token, loadAlerts, loadAlertSummary])
+
+  const handleAlertResolve = useCallback(async (alertId) => {
+    try {
+      const response = await fetch(`${API_BASE}/api/alerts/${alertId}/resolve`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (response.ok) {
+        await loadAlerts()
+        await loadAlertSummary()
+      }
+    } catch {
+      // ignore
+    }
+  }, [token, loadAlerts, loadAlertSummary])
+
   useEffect(() => {
     loadStations()
   }, [loadStations])
@@ -909,6 +999,10 @@ function MonitorApp({ user, onLogout }) {
     const hours = hoursMap[reportRange] || 24
     loadReport(reportStation, hours)
   }, [reportRange, reportStation, loadReport])
+
+  useEffect(() => {
+    loadAlerts()
+  }, [loadAlerts])
 
   const handleStationChange = (e) => {
     setSelectedStationId(e.target.value)
@@ -1733,6 +1827,191 @@ function MonitorApp({ user, onLogout }) {
           )}
         </section>
 
+      {/* ── 第17阶段：智能预警中心 ── */}
+        <section className="alert-center" aria-label="智能预警中心">
+          <div className="alert-header">
+            <h2>智能预警中心</h2>
+            <div className="alert-filters">
+              <select
+                className="alert-filter-station"
+                value={alertStation}
+                onChange={(e) => setAlertStation(e.target.value)}
+              >
+                <option value="">全部站点</option>
+                {stations.map((s) => (
+                  <option key={s.station_id} value={s.station_id}>
+                    {s.station_name}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="alert-filter-level"
+                value={alertLevel}
+                onChange={(e) => setAlertLevel(e.target.value)}
+              >
+                <option value="">全部等级</option>
+                <option value="attention">注意</option>
+                <option value="warning">预警</option>
+                <option value="danger">危险</option>
+              </select>
+              <select
+                className="alert-filter-status"
+                value={alertStatus}
+                onChange={(e) => setAlertStatus(e.target.value)}
+              >
+                <option value="">全部状态</option>
+                <option value="pending">待处理</option>
+                <option value="acknowledged">已确认</option>
+                <option value="resolved">已解除</option>
+              </select>
+              <div className="alert-range-toggle">
+                <button
+                  type="button"
+                  className={alertRange === '24h' ? 'active' : ''}
+                  onClick={() => setAlertRange('24h')}
+                >24小时</button>
+                <button
+                  type="button"
+                  className={alertRange === '7d' ? 'active' : ''}
+                  onClick={() => setAlertRange('7d')}
+                >7天</button>
+                <button
+                  type="button"
+                  className={alertRange === '30d' ? 'active' : ''}
+                  onClick={() => setAlertRange('30d')}
+                >30天</button>
+              </div>
+            </div>
+          </div>
+
+          {alertSummary && (
+            <div className="alert-stats-grid">
+              <div className="stat-card">
+                <span className="stat-label">预警总数</span>
+                <span className="stat-value">{alertSummary.total}</span>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">待处理</span>
+                <span className="stat-value">{alertSummary.pending}</span>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">已确认</span>
+                <span className="stat-value">{alertSummary.acknowledged}</span>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">已解除</span>
+                <span className="stat-value">{alertSummary.resolved}</span>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">注意</span>
+                <span className="stat-value">{alertSummary.attention}</span>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">预警</span>
+                <span className="stat-value">{alertSummary.warning}</span>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">危险</span>
+                <span className="stat-value">{alertSummary.danger}</span>
+              </div>
+            </div>
+          )}
+
+          {alertLoading && (
+            <p className="notice loading">正在加载预警数据...</p>
+          )}
+
+          {!alertLoading && (!alertItems || alertItems.length === 0) && (
+            <p className="notice insufficient">当前筛选范围内暂无预警记录</p>
+          )}
+
+          {!alertLoading && alertItems && alertItems.length > 0 && (
+            <div className="alert-cards">
+              {alertItems.map((a) => (
+                <article
+                  key={a.id}
+                  className={`alert-card alert-level-${a.warning_level}`}
+                >
+                  <div
+                    className="alert-card-top"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setAlertExpandedId(alertExpandedId === a.id ? null : a.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        setAlertExpandedId(alertExpandedId === a.id ? null : a.id)
+                      }
+                    }}
+                  >
+                    <div className="alert-card-left">
+                      <span className={`alert-level alert-level-${a.warning_level}`}>
+                        {ALERT_LEVEL_LABELS[a.warning_level] || a.warning_level}
+                      </span>
+                      <span className="alert-title">
+                        {a.title || `${a.station_name}水情预警`}
+                      </span>
+                    </div>
+                    <span className={`alert-status alert-status-${a.status}`}>
+                      {ALERT_STATUS_LABELS[a.status] || a.status}
+                    </span>
+                  </div>
+                  <div className="alert-card-meta">
+                    <span>站点：{a.station_name}</span>
+                    <button
+                      type="button"
+                      className="alert-station-link"
+                      onClick={() => setSelectedStationId(a.station_id)}
+                    >
+                      查看站点
+                    </button>
+                  </div>
+                  {alertExpandedId === a.id && (
+                    <div className="alert-detail">
+                      <p className="alert-message">{a.message}</p>
+                      <div className="alert-metrics">
+                        <span>当前水位 <strong>{Number(a.water_level).toFixed(2)} m</strong></span>
+                        <span>警戒水位 <strong>{Number(a.warning_level_value).toFixed(2)} m</strong></span>
+                        <span>降雨量 <strong>{Number(a.rainfall).toFixed(1)} mm</strong></span>
+                        <span>触发时间 <strong>{new Date(a.created_at).toLocaleString('zh-CN')}</strong></span>
+                      </div>
+                      {(a.acknowledged_at || a.resolved_at) && (
+                        <div className="alert-history">
+                          {a.acknowledged_at && (
+                            <span>确认：{new Date(a.acknowledged_at).toLocaleString('zh-CN')}（{a.acknowledged_by || '—'}）</span>
+                          )}
+                          {a.resolved_at && (
+                            <span>解除：{new Date(a.resolved_at).toLocaleString('zh-CN')}（{a.resolved_by || '—'}）</span>
+                          )}
+                        </div>
+                      )}
+                      {user.role === 'admin' && a.status !== 'resolved' && (
+                        <div className="alert-actions">
+                          {a.status !== 'acknowledged' && (
+                            <button
+                              type="button"
+                              className="alert-btn alert-btn-acknowledge"
+                              onClick={() => handleAlertAcknowledge(a.id)}
+                            >
+                              确认预警
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            className="alert-btn alert-btn-resolve"
+                            onClick={() => handleAlertResolve(a.id)}
+                          >
+                            解除预警
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+
       </section>
     </main>
   )
@@ -1825,7 +2104,7 @@ function App() {
     )
   }
 
-  return <MonitorApp user={user} onLogout={handleLogout} />
+  return <MonitorApp user={user} token={token} onLogout={handleLogout} />
 }
 
 export default App
