@@ -826,22 +826,28 @@ def get_data_quality_stats() -> dict:
     conn = get_connection()
     cursor = conn.cursor()
 
-    row = cursor.execute("SELECT COUNT(*) as cnt FROM water_data").fetchone()
-    total = row["cnt"]
+    total = cursor.execute("SELECT COUNT(*) as cnt FROM water_data").fetchone()["cnt"]
 
     def count_for(quality: str) -> int:
         return cursor.execute(
             "SELECT COUNT(*) as cnt FROM water_data WHERE data_quality = ?", (quality,)
         ).fetchone()["cnt"]
 
+    valid = count_for("valid")
+    invalid = count_for("invalid")
+    fallback = count_for("fallback")
+    good = count_for("good")
+    degraded = count_for("degraded")
     latest = cursor.execute("SELECT MAX(collected_at) as ts FROM water_data").fetchone()["ts"]
 
     conn.close()
     return {
         "total": total,
-        "valid": count_for("valid"),
-        "invalid": count_for("invalid"),
-        "fallback": count_for("fallback"),
+        "valid": valid,
+        "invalid": invalid,
+        "fallback": fallback,
+        "good": good,
+        "degraded": degraded,
         "latest_collection_time": latest or "",
     }
 

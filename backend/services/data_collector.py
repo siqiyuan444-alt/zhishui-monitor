@@ -3,8 +3,8 @@
 流程：读取配置 → 选择数据提供器 → 采集原始数据 → 标准化 + 质量检查 → 写入 SQLite → 记录采集日志。
 
 - 默认配置为 mock，保证现有网站正常运行；
-- 若配置的水情提供器（如 official_api）采集失败，自动 fallback 到模拟数据，
-  并把入库数据标记为 data_quality=fallback；
+- 若配置的水情提供器（如 chengdu_open_data）采集失败，自动 fallback 到模拟数据，
+  并把入库数据标记为 source=mock_fallback / data_quality=degraded（逐条记录也可覆盖）；
 - 每次采集都会记录：数据源、采集时间、成功/失败、数据条数、错误原因。
 """
 
@@ -20,8 +20,12 @@ logger = logging.getLogger("water_collector")
 MESSAGES = {
     "mock": "当前使用模拟水情数据",
     "official_api": "当前使用官方实时水情数据",
+    "chengdu_open_data": "当前使用成都政务开放数据（真实雨情）",
+    "mock_fallback": "成都官方雨情接口暂不可用，系统已自动切换至模拟数据",
     "fallback": "真实数据源暂不可用，系统已自动切换至模拟数据",
 }
+
+DEGRADED_QUALITIES = ("fallback", "degraded", "invalid")
 
 
 class DataCollector:
@@ -79,22 +83,27 @@ class DataCollector:
         else:
             records = raw_records or []
 
-        source = effective_provider.name
-        data_quality = "valid" if effective_provider.name == primary.name else "fallback"
-        status_flag = "active" if effective_provider.name == primary.name else "fallback"
+        if effective_provider.name == primary.name:
+            default_source = primary.name
+            default_quality = "valid"
+            status_flag = "active"
+        else:
+            default_source = "mock_fallback"
+            default_quality = "degraded"
+            status_flag = "fallback"
 
         valid_count = 0
         invalid_count = 0
         persisted = []
 
         for raw in records:
-            from data_normalizer import normalize_record, DataQualityError
+            from .data_normalizer import normalize_record, DataQualityError
 
             try:
                 rec = normalize_record(
                     raw,
-                    source=source,
-                    data_quality=data_quality,
+                    source=raw.get("source") or default_source,
+                    data_quality=raw.get("data_quality") or default_quality,
                     collected_at=datetime.now().isoformat(timespec="seconds"),
                 )
             except DataQualityError as exc:
@@ -129,26 +138,26 @@ class DataCollector:
 
         collected_at = datetime.now().isoformat(timespec="seconds")
         log_collection(
-            provider=source,
+            provider=default_source,
             status="success" if fetch_ok else status_flag,
             record_count=len(records),
             valid_count=valid_count,
             invalid_count=invalid_count,
-            fallback_count=valid_count if data_quality == "fallback" else 0,
+            fallback_count=sum(1 for r in persisted if r["data_quality"] in DEGRADED_QUALITIES),
             error_reason=error_reason,
             collected_at=collected_at,
         )
 
         logger.info(
             "采集完成 provider=%s records=%d valid=%d invalid=%d error=%s",
-            source, len(records), valid_count, invalid_count, error_reason or "无",
+            default_source, len(records), valid_count, invalid_count, error_reason or "无",
         )
 
         self.state = {
-            "provider": source,
+            "provider": default_source,
             "display_name": effective_provider.display_name,
             "status": status_flag,
-            "message": MESSAGES["fallback"] if status_flag == "fallback" else MESSAGES.get(source, "未知数据源"),
+            "message": MESSAGES["fallback"] if status_flag == "fallback" else MESSAGES.get(default_source, "未知数据源"),
             "last_collection_time": collected_at,
             "last_record_count": valid_count,
             "last_error": error_reason,

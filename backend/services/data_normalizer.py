@@ -16,10 +16,15 @@ STATION_LOCATION_MAP = {s["station_id"]: (s["latitude"], s["longitude"]) for s i
 SOURCE_MOCK = "mock"
 SOURCE_OFFICIAL = "official_api"
 SOURCE_MANUAL = "manual"
+SOURCE_CHENGDU_OPEN_DATA = "chengdu_open_data"
+SOURCE_MOCK_FALLBACK = "mock_fallback"
+SOURCE_INVALID_FALLBACK = "invalid_fallback"
 
 QUALITY_VALID = "valid"
 QUALITY_INVALID = "invalid"
 QUALITY_FALLBACK = "fallback"
+QUALITY_GOOD = "good"
+QUALITY_DEGRADED = "degraded"
 
 ALLOWED_STATUS = {"正常", "注意", "警戒", "超警"}
 

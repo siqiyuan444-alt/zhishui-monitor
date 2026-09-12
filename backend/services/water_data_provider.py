@@ -38,6 +38,10 @@ class WaterDataProvider(ABC):
     name: str = "unknown"
     display_name: str = "未知数据源"
 
+    def is_configured(self) -> bool:
+        """当前提供器是否满足使用条件（模拟数据始终可用）。"""
+        return True
+
     @abstractmethod
     def get_stations(self) -> list:
         """返回所有水文站基础信息。"""
@@ -57,15 +61,24 @@ class WaterDataProvider(ABC):
 def get_provider(name: str = None) -> WaterDataProvider:
     """根据配置创建数据提供器实例。
 
-    未指定时读取环境变量 WATER_DATA_PROVIDER（默认 mock）。
+    未指定时读取环境变量 WATER_DATA_PROVIDER；
+    若未显式指定且已配置成都官方凭据（CHENGDU_CLIENT_ID/SECRET），
+    则自动选择成都政务开放数据（chengdu_open_data），否则默认 mock。
     """
-    provider_name = (name or os.environ.get("WATER_DATA_PROVIDER", "mock")).strip().lower()
+    provider_name = (name or os.environ.get("WATER_DATA_PROVIDER", "")).strip().lower()
+
+    if not provider_name:
+        has_chengdu = bool(
+            os.environ.get("CHENGDU_CLIENT_ID", "").strip()
+            and os.environ.get("CHENGDU_CLIENT_SECRET", "").strip()
+        )
+        provider_name = "chengdu_open_data" if has_chengdu else "mock"
 
     if provider_name in ("mock", "simulation", "模拟"):
         from .mock_water_provider import MockWaterProvider
         return MockWaterProvider()
 
-    if provider_name in ("official_api", "real", "official", "真实"):
+    if provider_name in ("chengdu_open_data", "chengdu", "cd", "official_api", "real", "official", "成都", "真实"):
         from .real_water_provider import RealWaterProvider
         return RealWaterProvider()
 

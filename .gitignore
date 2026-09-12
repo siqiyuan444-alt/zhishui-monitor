@@ -11,7 +11,9 @@ backend/**/*.pyc
 backend/*.db
 backend/data/*.db
 
-# 环境变量文件
+# 环境变量文件（真实凭据一律忽略；仅 .env.example 可提交，且必须只含空值）
 .env
+.env.*
+!.env.example
 frontend/.env
 backend/.env

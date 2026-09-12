@@ -45,6 +45,7 @@ from database import (
     get_alert_summary,
     acknowledge_alert,
     resolve_alert,
+    get_data_quality_stats,
 )
 from services.data_analysis import (
     analyze_trend,
@@ -53,6 +54,13 @@ from services.data_analysis import (
     DEFAULT_FORECAST_HORIZON,
 )
 from services.alert_service import create_alert_if_needed
+from services.water_data_provider import get_provider, ProviderError
+from services.data_normalizer import (
+    SOURCE_CHENGDU_OPEN_DATA,
+    SOURCE_MOCK_FALLBACK,
+    QUALITY_DEGRADED,
+    QUALITY_VALID,
+)
 
 JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "dev-secret-key-change-in-production")
 JWT_ALGORITHM = "HS256"
@@ -255,44 +263,93 @@ def stations():
     return {"data": data}
 
 
+def _build_current_record(station: dict) -> dict:
+    """构造一条站点当前记录。
+
+    优先使用成都官方雨情 API 提供的真实降雨量；
+    官方数据不可用或未配置时回退到模拟数据，并按约定标注数据来源与质量。
+    """
+    provider = get_provider()
+    if provider.name == SOURCE_CHENGDU_OPEN_DATA:
+        try:
+            record = provider.get_station_data(station["station_id"])
+            if record:
+                return record
+        except ProviderError:
+            pass
+        except Exception:
+            pass
+        lo, hi = WATER_RANGES.get(station["station_id"], (3.0, 6.0))
+        water_level = round(random.uniform(lo, hi), 2)
+        rainfall = generate_rainfall()
+        return {
+            "station_id": station["station_id"],
+            "station_name": station["station_name"],
+            "water_level": water_level,
+            "warning_level": station["warning_level"],
+            "rainfall": rainfall,
+            "status": calculate_status(water_level, station["warning_level"], rainfall),
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "source": SOURCE_MOCK_FALLBACK,
+            "data_quality": QUALITY_DEGRADED,
+        }
+
+    lo, hi = WATER_RANGES.get(station["station_id"], (3.0, 6.0))
+    water_level = round(random.uniform(lo, hi), 2)
+    rainfall = generate_rainfall()
+    return {
+        "station_id": station["station_id"],
+        "station_name": station["station_name"],
+        "water_level": water_level,
+        "warning_level": station["warning_level"],
+        "rainfall": rainfall,
+        "status": calculate_status(water_level, station["warning_level"], rainfall),
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "source": "mock",
+        "data_quality": QUALITY_VALID,
+    }
+
+
 @app.get("/api/water-data")
 def get_water_data(station_id: str = Query(default="ST001")):
     station = get_station_by_id(station_id)
     if not station:
         return {"error": f"水文站 {station_id} 不存在"}
 
-    warning_level = station["warning_level"]
-    lo, hi = WATER_RANGES.get(station_id, (3.0, 6.0))
-    water_level = round(random.uniform(lo, hi), 2)
-    rainfall = generate_rainfall()
-    status = calculate_status(water_level, warning_level, rainfall)
+    record = _build_current_record(station)
 
     insert_water_data(
         station_id=station_id,
         station_name=station["station_name"],
-        water_level=water_level,
-        warning_level=warning_level,
-        rainfall=rainfall,
-        status=status,
+        water_level=record["water_level"],
+        warning_level=record["warning_level"],
+        rainfall=record["rainfall"],
+        status=record["status"],
+        source=record["source"],
+        data_quality=record["data_quality"],
+        created_at=record["timestamp"],
     )
 
-    if status != "正常":
+    if record["status"] != "正常":
         create_alert_if_needed(
             station_id=station_id,
             station_name=station["station_name"],
-            water_level=water_level,
-            warning_level=warning_level,
-            rainfall=rainfall,
-            status=status,
+            water_level=record["water_level"],
+            warning_level=record["warning_level"],
+            rainfall=record["rainfall"],
+            status=record["status"],
         )
 
     return {
         "station_id": station_id,
         "station_name": station["station_name"],
-        "water_level": water_level,
-        "warning_level": warning_level,
-        "rainfall": rainfall,
-        "status": status,
+        "water_level": record["water_level"],
+        "warning_level": record["warning_level"],
+        "rainfall": record["rainfall"],
+        "status": record["status"],
+        "source": record["source"],
+        "data_quality": record["data_quality"],
+        "updated_at": record["timestamp"],
     }
 
 
@@ -300,6 +357,27 @@ def get_water_data(station_id: str = Query(default="ST001")):
 def get_water_data_all():
     data = get_all_latest_water_data()
     return {"data": data}
+
+
+@app.get("/api/data-source")
+def data_source():
+    provider = get_provider()
+    return {
+        "source": provider.name,
+        "name": provider.name,
+        "display_name": provider.display_name,
+        "configured": provider.is_configured(),
+    }
+
+
+@app.get("/api/data-quality")
+def data_quality():
+    stats = get_data_quality_stats()
+    return {
+        "source": get_provider().name,
+        "data_quality": stats,
+        "quality": stats,
+    }
 
 
 @app.get("/api/water-history")
