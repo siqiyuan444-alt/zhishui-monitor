@@ -1603,7 +1603,14 @@ function MonitorApp({ user, token, onLogout }) {
         <section className="ai-analysis-section" id="ai" aria-label="AI 智能水情分析">
           <div className="ai-header">
             <h2>AI 智能水情分析</h2>
-            <span className="ai-source-tag">分析来源：规则分析（暂未接入外部 AI 模型）</span>
+            <span className="ai-source-tag">
+              分析来源：
+              {aiAnalysis
+                ? aiAnalysis.analysis_source === 'ai_model'
+                  ? 'AI 模型分析'
+                  : '规则分析（AI 暂不可用）'
+                : '规则分析（暂未接入外部 AI 模型）'}
+            </span>
           </div>
           <div className="ai-actions">
             <button
@@ -1612,7 +1619,7 @@ function MonitorApp({ user, token, onLogout }) {
               onClick={loadAiAnalysis}
               disabled={aiLoading}
             >
-              {aiLoading ? '正在分析...' : '运行智能分析'}
+              {aiLoading ? '正在分析...' : aiAnalysis ? 'AI 重新分析' : '运行智能分析'}
             </button>
             <span className="ai-hint">按需生成，不随自动轮询刷新</span>
           </div>
@@ -1638,7 +1645,9 @@ function MonitorApp({ user, token, onLogout }) {
                   <p className="ai-summary">{aiAnalysis.summary || '暂无总体判断'}</p>
                   {aiAnalysis.analysis_source && (
                     <p className="ai-source-note">
-                      分析来源：{aiAnalysis.analysis_source === 'rule_based' ? '规则分析（暂未接入外部 AI 模型）' : aiAnalysis.analysis_source}
+                      分析来源：
+                      {aiAnalysis.analysis_source === 'ai_model' ? 'AI 模型分析' : '规则分析（AI 暂不可用）'}
+                      {aiAnalysis.model_name ? `　模型：${aiAnalysis.model_name}` : ''}
                       {aiAnalysis.generated_at ? `　生成时间：${formatUpdateTime(aiAnalysis.generated_at)}` : ''}
                     </p>
                   )}

@@ -1,22 +1,26 @@
-"""Stage 20A：AI 智能水情分析测试。
+"""Stage 20A + 20B：AI 智能水情分析测试。
 
-覆盖 /api/ai-analysis 只读接口与 RuleBasedAnalyzer 规则分析：
-- 正常返回与返回结构完整
-- risk_level 合法、risk_score 在 0~100
-- 空数据不 500
-- 高水位提高风险等级
-- 现有预警逻辑仍然生效
-- analysis_source = rule_based（不调用外部 AI / 不出现 secret）
-- 现有 API 回归不受影响
+覆盖：
+- /api/ai-analysis 只读接口与 RuleBasedAnalyzer 规则分析；
+- OpenAIAnalyzer 真实 AI 分析器（Stage 20B）：选择、防抖降级、JSON 校验、
+  安全修正、mock 数据免责声明、短时缓存；
+- 真实 HTTP 一律通过 monkeypatch 模拟，绝不消耗真实 API quota；
+- 验证 API Key 绝不进入响应与日志。
 """
+
+import json
 
 import database
 import main
 from fastapi.testclient import TestClient
+import httpx
+import services.ai_analysis_service as ai_service
 from services.ai_analysis_service import (
     AIAnalysisContext,
+    OpenAIAnalyzer,
     RuleBasedAnalyzer,
     get_ai_analyzer,
+    reset_ai_analysis_cache,
 )
 from services.mock_water_provider import calculate_status
 
@@ -164,3 +168,257 @@ def test_ai_analysis_hours_param_bounds():
     assert client.get("/api/ai-analysis?hours=0").status_code == 422
     assert client.get("/api/ai-analysis?hours=721").status_code == 422
     assert client.get("/api/ai-analysis?hours=24").status_code == 200
+
+
+# ──────────────────────────── Stage 20B：OpenAIAnalyzer ────────────────────────────
+
+
+def _fake_openai_resp(content: str):
+    class FakeResp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": content}}]}
+
+    return FakeResp()
+
+
+def _valid_ai_content(**overrides) -> str:
+    base = {
+        "risk_level": "attention",
+        "risk_score": 55,
+        "summary": "各站水位整体平稳，个别站点需适当关注。",
+        "key_findings": ["ST001 水位略高于注意阈值"],
+        "trend_analysis": {"overall": "过去 24 小时多数站点水位平稳。", "stations": []},
+        "abnormal_stations": [],
+        "recommendations": ["按常规频率继续监测水位变化。"],
+        "generated_at": "2026-01-01T00:00:00",
+        "analysis_source": "ai_model",
+        "note": "",
+    }
+    base.update(overrides)
+    return json.dumps(base, ensure_ascii=False)
+
+
+def test_ai_analyzer_openai_selected_when_env_set(monkeypatch):
+    monkeypatch.delenv("AI_ANALYZER", raising=False)
+    assert isinstance(get_ai_analyzer(), RuleBasedAnalyzer)
+    monkeypatch.setenv("AI_ANALYZER", "openai")
+    analyzer = get_ai_analyzer()
+    assert isinstance(analyzer, OpenAIAnalyzer)
+    assert analyzer.analysis_source == "ai_model"
+
+
+def test_missing_api_key_falls_back_to_rule(monkeypatch):
+    monkeypatch.setenv("AI_ANALYZER", "openai")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("AI_ANALYSIS_CACHE_SECONDS", "0")
+    _reset_alerts()
+    _set_all_normal()
+    resp = client.get("/api/ai-analysis")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["analysis_source"] == "rule_based"
+    assert "真实 AI 分析暂不可用" in data["note"]
+
+
+def test_openai_success_returns_structured(monkeypatch):
+    monkeypatch.setenv("AI_ANALYZER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-key-for-test")
+    monkeypatch.setenv("AI_MODEL", "test-model-name")
+    monkeypatch.setenv("AI_ANALYSIS_CACHE_SECONDS", "0")
+    calls = []
+    monkeypatch.setattr(
+        ai_service.httpx,
+        "post",
+        lambda *a, **kw: (calls.append(kw), _fake_openai_resp(_valid_ai_content()))[1],
+    )
+    _reset_alerts()
+    _set_all_normal()
+    resp = client.get("/api/ai-analysis")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["analysis_source"] == "ai_model"
+    assert data["model_name"] == "test-model-name"
+    _assert_ai_structure(data)
+    assert calls, "真实 AI 分析器应发起一次 OpenAI API 调用"
+
+
+def test_openai_invalid_json_falls_back(monkeypatch):
+    monkeypatch.setenv("AI_ANALYZER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-key-for-test")
+    monkeypatch.setenv("AI_ANALYSIS_CACHE_SECONDS", "0")
+    monkeypatch.setattr(
+        ai_service.httpx,
+        "post",
+        lambda *a, **kw: _fake_openai_resp("这不是 JSON 响应"),
+    )
+    _reset_alerts()
+    _set_all_normal()
+    resp = client.get("/api/ai-analysis")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["analysis_source"] == "rule_based"
+    assert "真实 AI 分析暂不可用" in data["note"]
+
+
+def test_openai_invalid_risk_level_falls_back(monkeypatch):
+    monkeypatch.setenv("AI_ANALYZER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-key-for-test")
+    monkeypatch.setenv("AI_ANALYSIS_CACHE_SECONDS", "0")
+    monkeypatch.setattr(
+        ai_service.httpx,
+        "post",
+        lambda *a, **kw: _fake_openai_resp(_valid_ai_content(risk_level="critical")),
+    )
+    _reset_alerts()
+    _set_all_normal()
+    data = client.get("/api/ai-analysis").json()
+    assert data["analysis_source"] == "rule_based"
+
+
+def test_openai_invalid_risk_score_falls_back(monkeypatch):
+    monkeypatch.setenv("AI_ANALYZER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-key-for-test")
+    monkeypatch.setenv("AI_ANALYSIS_CACHE_SECONDS", "0")
+    for bad in ("high", 150, -5):
+        monkeypatch.setattr(
+            ai_service.httpx,
+            "post",
+            lambda *a, **kw: _fake_openai_resp(_valid_ai_content(risk_score=bad)),
+        )
+        data = client.get("/api/ai-analysis").json()
+        assert data["analysis_source"] == "rule_based"
+
+
+def test_openai_timeout_falls_back(monkeypatch):
+    monkeypatch.setenv("AI_ANALYZER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-key-for-test")
+    monkeypatch.setenv("AI_ANALYSIS_CACHE_SECONDS", "0")
+
+    def raise_timeout(*a, **kw):
+        raise httpx.TimeoutException("timed out")
+
+    monkeypatch.setattr(ai_service.httpx, "post", raise_timeout)
+    _reset_alerts()
+    _set_all_normal()
+    data = client.get("/api/ai-analysis").json()
+    assert data["analysis_source"] == "rule_based"
+    assert "真实 AI 分析暂不可用" in data["note"]
+
+
+def test_openai_http_500_falls_back(monkeypatch):
+    monkeypatch.setenv("AI_ANALYZER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-key-for-test")
+    monkeypatch.setenv("AI_ANALYSIS_CACHE_SECONDS", "0")
+    req = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    server_error = httpx.HTTPStatusError(
+        "500 Internal Server Error", request=req, response=httpx.Response(500, request=req)
+    )
+
+    def raise_500(*a, **kw):
+        raise server_error
+
+    monkeypatch.setattr(ai_service.httpx, "post", raise_500)
+    _reset_alerts()
+    _set_all_normal()
+    data = client.get("/api/ai-analysis").json()
+    assert data["analysis_source"] == "rule_based"
+    assert "真实 AI 分析暂不可用" in data["note"]
+
+
+def test_api_key_not_in_response(monkeypatch):
+    secret_key = "sk-FAKE-SECRET-KEY-12345"
+    monkeypatch.setenv("AI_ANALYZER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", secret_key)
+    monkeypatch.setenv("AI_ANALYSIS_CACHE_SECONDS", "0")
+    monkeypatch.setattr(
+        ai_service.httpx,
+        "post",
+        lambda *a, **kw: _fake_openai_resp("bad response"),
+    )
+    _reset_alerts()
+    _set_all_normal()
+    data = client.get("/api/ai-analysis").json()
+    assert secret_key not in str(data).lower()
+
+
+def test_api_key_not_in_logs(monkeypatch, caplog):
+    secret_key = "sk-FAKE-SECRET-KEY-12345"
+    monkeypatch.setenv("AI_ANALYZER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", secret_key)
+    monkeypatch.setenv("AI_ANALYSIS_CACHE_SECONDS", "0")
+
+    def raise_timeout(*a, **kw):
+        raise httpx.TimeoutException("Read timed out")
+
+    monkeypatch.setattr(ai_service.httpx, "post", raise_timeout)
+    _reset_alerts()
+    _set_all_normal()
+    client.get("/api/ai-analysis")
+    assert secret_key not in caplog.text
+    assert "已降级为规则分析" in caplog.text
+
+
+def test_mock_data_not_called_official():
+    _reset_alerts()
+    _set_all_normal()
+    data = client.get("/api/ai-analysis").json()
+    assert "模拟数据" in data["note"]
+    lower = str(data).lower()
+    assert "成都实时水情" not in lower
+    assert "官方实时" not in lower
+
+
+def test_ai_cannot_lower_system_severe_risk(monkeypatch):
+    monkeypatch.setenv("AI_ANALYZER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-key-for-test")
+    monkeypatch.setenv("AI_ANALYSIS_CACHE_SECONDS", "0")
+    # AI 声称一切正常，但系统规则已判定 ST001 超警
+    monkeypatch.setattr(
+        ai_service.httpx,
+        "post",
+        lambda *a, **kw: _fake_openai_resp(_valid_ai_content(risk_level="normal", risk_score=20)),
+    )
+    _reset_alerts()
+    _set_all_normal()
+    _latest_water("ST001", 5.5, 0.0)  # 5.5 >= 5.0*1.1 → 超警
+    data = client.get("/api/ai-analysis").json()
+    assert data["analysis_source"] == "ai_model"
+    assert data["risk_level"] == "severe"
+    assert data["risk_score"] >= 95
+    assert any(s["station_id"] == "ST001" for s in data["abnormal_stations"])
+
+
+def test_ai_model_cache_reuses_result(monkeypatch):
+    monkeypatch.setenv("AI_ANALYZER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-key-for-test")
+    monkeypatch.setenv("AI_ANALYSIS_CACHE_SECONDS", "60")
+    reset_ai_analysis_cache()
+    calls = {"n": 0}
+    monkeypatch.setattr(
+        ai_service.httpx,
+        "post",
+        lambda *a, **kw: (calls.__setitem__("n", calls["n"] + 1), _fake_openai_resp(_valid_ai_content()))[1],
+    )
+    _reset_alerts()
+    _set_all_normal()
+    _latest_water("ST001", 1.11, 0.0)  # 唯一状态，避免与其他测试指纹冲突
+    assert client.get("/api/ai-analysis").json()["analysis_source"] == "ai_model"
+    assert client.get("/api/ai-analysis").json()["analysis_source"] == "ai_model"
+    assert calls["n"] == 1, "相同数据状态短时间内不应重复调用真实模型"
+    _latest_water("ST001", 1.22, 0.0)  # 数据状态变化，指纹变化，应重新调用
+    assert client.get("/api/ai-analysis").json()["analysis_source"] == "ai_model"
+    assert calls["n"] == 2
+    reset_ai_analysis_cache()
+
+
+def test_rule_based_analyzer_still_works_with_openai_env(monkeypatch):
+    monkeypatch.setenv("AI_ANALYZER", "openai")
+    _reset_alerts()
+    _set_all_normal()
+    context = ai_service.build_analysis_context(hours=24)
+    result = RuleBasedAnalyzer().analyze(context)
+    _assert_ai_structure(result)
+    assert result["analysis_source"] == "rule_based"

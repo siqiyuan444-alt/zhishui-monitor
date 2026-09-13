@@ -1,23 +1,38 @@
-"""AI 智能水情分析服务（Stage 20A 架构设计与最小可运行骨架）。
+"""AI 智能水情分析服务（Stage 20A 架构 + Stage 20B 真实 AI 接入）。
 
-本阶段定位：
-- 只实现 RuleBasedAnalyzer（复用现有水利规则的规则分析），
-  analysis_source 固定为 "rule_based"，绝不冒充已接入真实 AI 模型；
-- 不调用任何外部 AI API，不引入 API Key / Client Secret，不保存分析结果到数据库；
-- 通过 BaseAIAnalyzer 统一接口为后续 Stage 20B（真实 AI 模型接入）预留抽象，
-  前端与 main.py 只依赖该接口，不依赖任何具体 AI 厂商。
+架构：
+- BaseAIAnalyzer 统一分析器接口，前端与 main.py 只依赖该接口；
+- RuleBasedAnalyzer：复用现有水利规则 calculate_status() 的规则分析，
+  analysis_source = "rule_based"，作为默认与降级方案；
+- OpenAIAnalyzer：真实 AI 模型分析（Stage 20B），analysis_source = "ai_model"，
+  通过环境变量 AI_ANALYZER=openai 启用，失败时由 generate_ai_analysis() 自动
+  降级为 RuleBasedAnalyzer，绝不因 AI 失败导致水情监测系统不可用。
+
+安全与边界：
+- API Key / Client Secret 只从环境变量读取，绝不写入代码、日志、异常信息或响应；
+- 不请求时（默认 AI_ANALYZER=rule_based）不产生任何外部 AI API 调用与费用；
+- AI 只作为“分析解释层”，不得覆盖系统规则：AI 返回的风险等级若低于系统
+  calculate_status() 判定，将按系统规则安全修正（不得降低风险）；
+- 数据来源为 mock 时必须明确标注为模拟数据，禁止冒充实时官方观测结果；
+- AI 返回需经 JSON 解析与 Schema 校验，任何失败自动降级，不向客户端抛 500；
+- 复用项目已有 httpx 调用，不引入 OpenAI 官方 SDK 等大型依赖。
 
 设计原则：
-- 复用现有水情状态算法 calculate_status() 与多站对比分析 build_comparison()，
-  不重设计一套与现有预警标准冲突的规则；
 - 输入全部来自现有系统数据（water_data / warning_records / 趋势与对比分析），
-  不建立第二套水情数据库，不修改现有 water_data 数据表结构。
+  不建立第二套水情数据库，不修改现有数据表结构。
 """
 
+import hashlib
+import json
+import logging
 import os
+import re
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+
+import httpx
 
 from database import (
     get_stations,
@@ -30,9 +45,17 @@ from database import (
 from services.data_analysis import build_comparison
 from services.mock_water_provider import calculate_status
 
+logger = logging.getLogger("water_monitor.ai_analysis")
+
 # 合法的 AI 风险等级 / 分析来源取值
 RISK_LEVELS = ("normal", "attention", "warning", "severe")
 ANALYSIS_SOURCES = ("rule_based", "ai_model")
+RISK_ORDER = {"normal": 0, "attention": 1, "warning": 2, "severe": 3}
+
+# 真实 AI 调用默认配置（环境变量同名覆盖；仅为可选功能，不配置不影响系统运行）
+DEFAULT_AI_MODEL = "gpt-4o-mini"
+DEFAULT_AI_TIMEOUT = 30
+DEFAULT_AI_CACHE_SECONDS = 60
 
 # 现有水情状态 → AI 风险等级 / 基础评分映射（与 calculate_status 保持一致）
 STATUS_AI_RISK = {
@@ -147,9 +170,10 @@ class AIAnalysisOutput:
     generated_at: str
     analysis_source: str
     note: str = ""
+    model_name: str = ""
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "risk_level": self.risk_level,
             "risk_score": int(self.risk_score),
             "summary": self.summary,
@@ -161,6 +185,9 @@ class AIAnalysisOutput:
             "analysis_source": self.analysis_source,
             "note": self.note,
         }
+        if self.model_name:
+            data["model_name"] = self.model_name
+        return data
 
 
 # ──────────────────────────── 分析器接口 ────────────────────────────
@@ -211,6 +238,7 @@ class RuleBasedAnalyzer(BaseAIAnalyzer):
                 recommendations=["请稍后重试，待系统采集到有效数据后再生成分析。"],
                 generated_at=now_iso,
                 analysis_source=self.analysis_source,
+                note=_mock_data_disclaimer(context),
             ).to_dict()
 
         sites = []
@@ -342,6 +370,7 @@ class RuleBasedAnalyzer(BaseAIAnalyzer):
             recommendations=recommendations,
             generated_at=now_iso,
             analysis_source=self.analysis_source,
+            note=_mock_data_disclaimer(context),
         ).to_dict()
 
     @staticmethod
@@ -367,6 +396,354 @@ class RuleBasedAnalyzer(BaseAIAnalyzer):
         return "当前各站点水情正常，整体风险较低。"
 
 
+# ──────────────────────────── 配置与短时缓存 ────────────────────────────
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, "").strip() or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _ai_timeout() -> float:
+    return float(_env_int("AI_TIMEOUT", DEFAULT_AI_TIMEOUT))
+
+
+def _cache_seconds() -> int:
+    return _env_int("AI_ANALYSIS_CACHE_SECONDS", DEFAULT_AI_CACHE_SECONDS)
+
+
+_AI_CACHE: dict = {}
+
+
+def reset_ai_analysis_cache() -> None:
+    """清空 AI 分析短时缓存（测试与运维使用）。"""
+    _AI_CACHE.clear()
+
+
+def _cache_key(hours: int, context: "AIAnalysisContext") -> str:
+    """以 hours + 当前各站最新数据状态 + 未解除预警集合作为指纹。"""
+    states = sorted(
+        f"{s.station_id}:{_to_float(s.water_level):.3f}:{_to_float(s.rainfall):.1f}:{s.collected_at or ''}"
+        for s in (context.stations or [])
+    )
+    alert_ids = sorted(str(a.id) for a in (context.alerts or []))
+    fingerprint = hashlib.sha256(
+        "|".join(states + [f"alerts:{alert_ids}"]).encode("utf-8")
+    ).hexdigest()[:16]
+    return f"ai-analysis:{int(hours)}:{fingerprint}"
+
+
+# ──────────────────────────── 通用辅助 ────────────────────────────
+
+
+def _safe_str(value) -> str:
+    return "" if value is None else str(value)
+
+
+def _truncate(text: str, limit: int) -> str:
+    text = text.strip()
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def _mock_data_disclaimer(context: "AIAnalysisContext") -> str:
+    """当数据来源包含 mock 时，明确标注模拟数据，禁止冒充真实观测。"""
+    if any((getattr(s, "source", "") or "") == "mock" for s in (context.stations or [])):
+        return "当前数据来源为模拟数据，不代表真实官方观测结果。"
+    return ""
+
+
+def _append_in_note(data: dict, text: str) -> dict:
+    if not text:
+        return data
+    note = str(data.get("note") or "")
+    if text not in note:
+        data["note"] = (note + " " + text) if note else text
+    return data
+
+
+# ──────────────────────────── 真实 AI 分析器（OpenAI 兼容） ────────────────────────────
+
+
+class OpenAIAnalyzer(BaseAIAnalyzer):
+    """OpenAI 兼容真实 AI 分析器（Stage 20B）。
+
+    - API Key 与服务端地址只从环境变量读取，绝不写入代码 / 日志 / 响应；
+    - 调用失败、超时、JSON 非法或结构校验失败时抛出 AIAnalysisError，
+      由 generate_ai_analysis() 统一降级为 RuleBasedAnalyzer；
+    - 复用项目已有 httpx，避免为一次调用引入 OpenAI 官方 SDK 等大型依赖。
+    """
+
+    analysis_source = "ai_model"
+
+    def __init__(self):
+        self.model_name = os.environ.get("AI_MODEL", "").strip() or DEFAULT_AI_MODEL
+        self.api_base = (
+            os.environ.get("OPENAI_API_BASE", "").strip() or "https://api.openai.com/v1"
+        ).rstrip("/")
+        self.api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+        self.timeout = _ai_timeout()
+
+    def analyze(self, context: AIAnalysisContext) -> dict:
+        if not self.api_key:
+            raise AIAnalysisError("未配置 OPENAI_API_KEY，无法调用真实 AI 模型")
+        content = self._call_model(context)
+        data = _parse_and_validate(content)
+        data = _apply_safety_correction(context, data)
+        data = _append_in_note(data, _mock_data_disclaimer(context))
+        return AIAnalysisOutput(
+            risk_level=data["risk_level"],
+            risk_score=data["risk_score"],
+            summary=data["summary"],
+            key_findings=data["key_findings"],
+            trend_analysis=data["trend_analysis"],
+            abnormal_stations=data["abnormal_stations"],
+            recommendations=data["recommendations"],
+            generated_at=data["generated_at"],
+            analysis_source="ai_model",
+            note=data.get("note", ""),
+            model_name=self.model_name,
+        ).to_dict()
+
+    def _call_model(self, context: AIAnalysisContext) -> str:
+        url = f"{self.api_base}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": self.model_name,
+            "temperature": 0.2,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": _build_system_prompt()},
+                {"role": "user", "content": _build_user_prompt(context)},
+            ],
+        }
+        try:
+            resp = httpx.post(url, headers=headers, json=payload, timeout=self.timeout)
+            resp.raise_for_status()
+            body = resp.json()
+        except httpx.TimeoutException:
+            raise AIAnalysisError("OpenAI API 请求超时") from None
+        except httpx.HTTPStatusError as exc:
+            raise AIAnalysisError(f"OpenAI API 调用失败: HTTP {exc.response.status_code}") from None
+        except Exception as exc:
+            raise AIAnalysisError(f"OpenAI API 请求异常: {type(exc).__name__}") from None
+        try:
+            content = body["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError):
+            raise AIAnalysisError("OpenAI API 响应缺少 choices/message/content") from None
+        if not isinstance(content, str) or not content.strip():
+            raise AIAnalysisError("OpenAI API 返回内容为空")
+        return content
+
+
+def _build_system_prompt() -> str:
+    return (
+        "你是智慧水利水情分析助手。请仅依据系统传入的水情数据进行分析研判，并严格输出 JSON。\n"
+        "硬性要求：\n"
+        "1. 不得修改、虚构或遗漏任何输入数据；不得虚构水文站、水位、降雨量或预警信息。\n"
+        "2. 不得声称获取了实时官方数据，不得声称访问了成都水务系统或任何外部数据源。\n"
+        "3. 若数据来源为 mock/模拟数据，必须明确指出这是模拟数据，不代表真实官方观测结果。\n"
+        "4. 数据不足时必须明确说明，不得自行补全数据。\n"
+        "5. risk_level 只能取以下枚举值之一：normal、attention、warning、severe。\n"
+        "6. risk_score 必须为 0 到 100 之间的整数。\n"
+        "7. 输出必须包含以下字段：risk_level, risk_score, summary, key_findings, "
+        "trend_analysis, abnormal_stations, recommendations, generated_at, analysis_source, note。\n"
+        "   其中 key_findings 与 recommendations 为字符串数组；\n"
+        "   abnormal_stations 为对象数组，元素含 station_id, station_name, risk_level, "
+        "status, water_level, warning_level, rainfall, trend；\n"
+        "   trend_analysis 为对象，包含 overall(字符串) 与 stations(对象数组，"
+        "元素含 station_id, station_name, direction, description)。\n"
+        "8. 输出只允许 JSON，不要包含 JSON 之外的解释文字或代码围栏。"
+    )
+
+
+def _build_user_prompt(context: AIAnalysisContext) -> str:
+    payload = {
+        "hours": int(context.hours or 24),
+        "stations": [
+            {
+                "station_id": s.station_id,
+                "station_name": s.station_name or s.station_id,
+                "water_level": _to_float(s.water_level),
+                "warning_level": _to_float(s.warning_level),
+                "rainfall": round(_to_float(s.rainfall), 1),
+                "status": s.status,
+                "source": s.source,
+                "data_quality": s.data_quality,
+                "collected_at": s.collected_at,
+            }
+            for s in (context.stations or [])
+        ],
+        "trends": {
+            sid: {
+                "direction": t.direction,
+                "slope": t.slope,
+                "change": t.change,
+                "recent_values": (t.recent_values or [])[-12:],
+            }
+            for sid, t in (context.trends or {}).items()
+        },
+        "statistics": {
+            sid: {
+                "current": st.current,
+                "min": st.min,
+                "max": st.max,
+                "average": st.average,
+                "change": st.change,
+            }
+            for sid, st in (context.statistics or {}).items()
+        },
+        "alerts": [
+            {
+                "id": a.id,
+                "station_name": a.station_name,
+                "level": a.level,
+                "title": a.title,
+                "status": a.status,
+                "created_at": a.created_at,
+            }
+            for a in (context.alerts or [])
+        ],
+        "alert_summary": context.alert_summary or {},
+        "risk_ranking": (context.risk_ranking or [])[:20],
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _parse_and_validate(content: str) -> dict:
+    """解析 AI 返回内容并做 Schema 校验；失败抛出 AIAnalysisError。"""
+    try:
+        text = content.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
+            text = re.sub(r"\s*```$", "", text).strip()
+        start = text.find("{")
+        end = text.rfind("}")
+        if start < 0 or end <= start:
+            raise ValueError("未找到 JSON 对象")
+        raw = json.loads(text[start:end + 1])
+    except Exception as exc:
+        raise AIAnalysisError(f"AI 返回 JSON 解析失败: {type(exc).__name__}") from None
+    if not isinstance(raw, dict):
+        raise AIAnalysisError("AI 返回内容不是 JSON 对象")
+    return _validate_output(raw)
+
+
+def _validate_output(raw: dict) -> dict:
+    required = (
+        "risk_level", "risk_score", "summary", "key_findings",
+        "trend_analysis", "abnormal_stations", "recommendations",
+        "generated_at", "analysis_source", "note",
+    )
+    missing = [k for k in required if k not in raw or raw[k] is None]
+    if missing:
+        raise AIAnalysisError(f"AI 返回缺少必要字段: {','.join(missing)}")
+
+    risk_level = _safe_str(raw["risk_level"]).strip().lower()
+    if risk_level not in RISK_LEVELS:
+        raise AIAnalysisError(f"AI 返回非法 risk_level: {risk_level}")
+
+    try:
+        score = float(raw["risk_score"])
+    except (TypeError, ValueError):
+        raise AIAnalysisError("AI 返回非法的 risk_score（非数值）") from None
+    if not (0 <= score <= 100):
+        raise AIAnalysisError(f"AI 返回非法 risk_score（超出 0~100）: {score}")
+
+    summary = _safe_str(raw["summary"]).strip()
+    if not summary:
+        raise AIAnalysisError("AI 返回 summary 为空")
+
+    if not isinstance(raw["key_findings"], list):
+        raise AIAnalysisError("AI 返回 key_findings 不是数组")
+    if not isinstance(raw["trend_analysis"], dict):
+        raise AIAnalysisError("AI 返回 trend_analysis 不是对象")
+    if not isinstance(raw["abnormal_stations"], list):
+        raise AIAnalysisError("AI 返回 abnormal_stations 不是数组")
+    if not isinstance(raw["recommendations"], list):
+        raise AIAnalysisError("AI 返回 recommendations 不是数组")
+
+    trend = raw["trend_analysis"]
+    trend_stations = trend.get("stations")
+    overall = _safe_str(trend.get("overall")).strip()
+    if not isinstance(trend_stations, list):
+        raise AIAnalysisError("AI 返回 trend_analysis.stations 不是数组")
+    if not overall:
+        raise AIAnalysisError("AI 返回 trend_analysis.overall 为空")
+
+    return {
+        "risk_level": risk_level,
+        "risk_score": int(round(score)),
+        "summary": _truncate(summary, 2000),
+        "key_findings": [_truncate(_safe_str(x), 500) for x in raw["key_findings"]][:20],
+        "trend_analysis": {
+            "overall": _truncate(overall, 1000),
+            "stations": [_clean_trend_station(x) for x in trend_stations if isinstance(x, dict)][:50],
+        },
+        "abnormal_stations": [
+            _clean_abnormal_station(x) for x in raw["abnormal_stations"] if isinstance(x, dict)
+        ][:50],
+        "recommendations": [_truncate(_safe_str(x), 500) for x in raw["recommendations"]][:20],
+        "generated_at": _safe_str(raw["generated_at"]) or datetime.now().isoformat(timespec="seconds"),
+        "note": _truncate(_safe_str(raw.get("note", "")), 500),
+    }
+
+
+def _clean_abnormal_station(x: dict) -> dict:
+    rl = _safe_str(x.get("risk_level")).strip().lower()
+    if rl not in RISK_LEVELS:
+        rl = "attention"
+    return {
+        "station_id": _safe_str(x.get("station_id")),
+        "station_name": _safe_str(x.get("station_name")) or _safe_str(x.get("station_id")),
+        "risk_level": rl,
+        "status": _safe_str(x.get("status")),
+        "water_level": _to_float(x.get("water_level")),
+        "warning_level": _to_float(x.get("warning_level")),
+        "rainfall": round(_to_float(x.get("rainfall")), 1),
+    }
+
+
+def _clean_trend_station(x: dict) -> dict:
+    return {
+        "station_id": _safe_str(x.get("station_id")),
+        "station_name": _safe_str(x.get("station_name")) or _safe_str(x.get("station_id")),
+        "direction": _safe_str(x.get("direction")) or "stable",
+        "description": _truncate(_safe_str(x.get("description")) or "暂无描述", 300),
+    }
+
+
+def _apply_safety_correction(context: AIAnalysisContext, data: dict) -> dict:
+    """AI 是分析解释层，不是新的安全规则引擎。
+
+    当 AI 返回的风险低于系统 calculate_status() 判定时，以系统规则为准升级，
+    绝不允许 AI 降低系统已判定的风险等级。
+    """
+    rule = RuleBasedAnalyzer().analyze(context)
+    rule_risk = rule["risk_level"]
+    data_risk = data["risk_level"]
+    if RISK_ORDER[data_risk] < RISK_ORDER[rule_risk]:
+        data["risk_level"] = rule_risk
+        data["risk_score"] = max(int(data["risk_score"]), int(rule["risk_score"]))
+        seg = "已按系统安全规则校准风险等级。"
+        data["note"] = seg if not data.get("note") else f"{data['note']} {seg}"
+    known = {s.get("station_id") for s in data["abnormal_stations"]}
+    for x in rule["abnormal_stations"]:
+        sid = x.get("station_id")
+        if sid and sid not in known:
+            data["abnormal_stations"].append(x)
+            known.add(sid)
+    if not data["recommendations"]:
+        data["recommendations"] = list(rule["recommendations"])
+    if not data["key_findings"]:
+        data["key_findings"] = list(rule["key_findings"])
+    return data
+
+
 # ──────────────────────────── 分析器工厂 ────────────────────────────
 
 
@@ -374,11 +751,14 @@ def get_ai_analyzer(name: str = None) -> BaseAIAnalyzer:
     """根据配置创建分析器实例。
 
     未指定时读取环境变量 AI_ANALYZER（默认 rule_based）。
-    本阶段仅支持规则分析器；真实 AI 模型留待 Stage 20B。
+    - rule_based：默认规则分析，不调用任何外部 API；
+    - openai：OpenAI 兼容真实 AI 分析器（需配置 OPENAI_API_KEY，失败自动降级）。
     """
     analyzer_name = (name or os.environ.get("AI_ANALYZER", "rule_based")).strip().lower()
     if analyzer_name in ("rule_based", "rule", "规则"):
         return RuleBasedAnalyzer()
+    if analyzer_name in ("openai", "gpt", "chatgpt", "ai_model"):
+        return OpenAIAnalyzer()
     raise AIAnalysisError(f"未知的 AI 分析器配置: {analyzer_name}")
 
 
@@ -462,10 +842,37 @@ def build_analysis_context(hours: int = 24) -> AIAnalysisContext:
 
 
 def generate_ai_analysis(hours: int = 24) -> dict:
-    """读取当前系统水情数据 → 调用分析器 → 返回结构化结果（不写库、不调外部 API）。"""
+    """读取当前系统水情数据 → 调用所选分析器 → 返回结构化结果（不写库）。
+
+    - 默认 rule_based，不产生任何外部 AI API 调用；
+    - AI_ANALYZER=openai 时调用真实模型；任何失败自动降级 RuleBasedAnalyzer，
+      并在 note 中说明“真实 AI 分析暂不可用，当前使用规则分析结果”；
+    - 仅对真实模型成功结果做短时缓存（AI_ANALYSIS_CACHE_SECONDS 秒，默认 60），
+      相同 hours + 数据状态短时间内不重复调用模型。
+    """
     context = build_analysis_context(hours=hours)
     analyzer = get_ai_analyzer()
-    result = analyzer.analyze(context)
-    if isinstance(result, AIAnalysisOutput):
-        return result.to_dict()
-    return result
+    is_ai = analyzer.analysis_source == "ai_model"
+    cache_seconds = _cache_seconds()
+    key = _cache_key(hours, context) if (is_ai and cache_seconds > 0) else None
+    if key:
+        entry = _AI_CACHE.get(key)
+        if entry and (time.monotonic() - entry["ts"]) < cache_seconds:
+            return dict(entry["data"])
+    try:
+        result = analyzer.analyze(context)
+        data = result.to_dict() if isinstance(result, AIAnalysisOutput) else result
+        fallback = False
+    except Exception as exc:
+        reason = exc if isinstance(exc, AIAnalysisError) else type(exc).__name__
+        logger.warning("AI 模型分析失败，已降级为规则分析：%s", reason)
+        rule_result = RuleBasedAnalyzer().analyze(context)
+        rule = rule_result.to_dict() if isinstance(rule_result, AIAnalysisOutput) else rule_result
+        fallback_note = "真实 AI 分析暂不可用，当前使用规则分析结果。"
+        note = str(rule.get("note") or "")
+        rule["note"] = (fallback_note + " " + note) if note else fallback_note
+        data = rule
+        fallback = True
+    if key and not fallback:
+        _AI_CACHE[key] = {"ts": time.monotonic(), "data": dict(data)}
+    return data

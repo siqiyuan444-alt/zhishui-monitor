@@ -811,10 +811,10 @@ def alerts_resolve(alert_id: int, admin: dict = Depends(require_admin)):
 
 @app.get("/api/ai-analysis")
 def ai_analysis_api(hours: int = Query(default=24, ge=HOURS_MIN, le=HOURS_MAX)):
-    """按需生成结构化 AI 水情分析（只读，不写库，不调用外部 AI）。
+    """按需生成结构化 AI 水情分析（只读，不写库）。
 
-    当前为规则分析模式（analysis_source=rule_based），暂未接入真实 AI 模型。
-    任何异常都返回结构化降级结果，绝不向客户端抛出 500。
+    默认规则分析（rule_based）；配置 AI_ANALYZER=openai 后调用真实 AI 模型，
+    任何失败都会自动降级为规则分析，绝不向客户端抛出 500。
     """
     try:
         return generate_ai_analysis(hours=hours)
