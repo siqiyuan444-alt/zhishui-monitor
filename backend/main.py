@@ -52,6 +52,7 @@ from services.data_analysis import (
     DEFAULT_FORECAST_HORIZON,
 )
 from services.alert_service import create_alert_if_needed
+from services.ai_analysis_service import generate_ai_analysis
 from services.water_data_provider import get_provider, ProviderError
 from services.real_water_provider import RealWaterProvider
 from services.mock_water_provider import build_mock_record
@@ -803,6 +804,33 @@ def alerts_resolve(alert_id: int, admin: dict = Depends(require_admin)):
     if not success:
         raise HTTPException(status_code=404, detail=f"预警记录 {alert_id} 不存在")
     return {"success": True}
+
+
+# ──────────────────────────── 第20阶段：AI 智能水情分析 ────────────────────────────
+
+
+@app.get("/api/ai-analysis")
+def ai_analysis_api(hours: int = Query(default=24, ge=HOURS_MIN, le=HOURS_MAX)):
+    """按需生成结构化 AI 水情分析（只读，不写库，不调用外部 AI）。
+
+    当前为规则分析模式（analysis_source=rule_based），暂未接入真实 AI 模型。
+    任何异常都返回结构化降级结果，绝不向客户端抛出 500。
+    """
+    try:
+        return generate_ai_analysis(hours=hours)
+    except Exception:
+        return {
+            "risk_level": "normal",
+            "risk_score": 0,
+            "summary": "AI 分析暂不可用",
+            "key_findings": ["AI 分析服务暂不可用"],
+            "trend_analysis": {"overall": "AI 分析暂不可用", "stations": []},
+            "abnormal_stations": [],
+            "recommendations": ["请稍后重试。"],
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "analysis_source": "rule_based",
+            "note": "AI 分析暂不可用",
+        }
 
 
 if os.path.isdir(_dist_dir):

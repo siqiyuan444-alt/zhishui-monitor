@@ -114,6 +114,22 @@ function formatUpdateTime(value) {
   return d.toLocaleString('zh-CN', { hour12: false })
 }
 
+const AI_RISK_LABELS = { normal: '正常', attention: '注意', warning: '警戒', severe: '超警' }
+const AI_RISK_CLASS = {
+  normal: 'ai-risk-normal',
+  attention: 'ai-risk-attention',
+  warning: 'ai-risk-warning',
+  severe: 'ai-risk-severe',
+}
+
+function aiRiskLabel(level) {
+  return AI_RISK_LABELS[level] || level || '—'
+}
+
+function aiRiskClass(level) {
+  return AI_RISK_CLASS[level] || 'ai-risk-normal'
+}
+
 function waterCompareOption(data, range) {
   const is7d = range === '168h'
   return {
@@ -975,6 +991,9 @@ function MonitorApp({ user, token, onLogout }) {
   const [isLoading, setIsLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState('')
   const [dataErrorMessage, setDataErrorMessage] = useState('')
+  const [aiAnalysis, setAiAnalysis] = useState(null)
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiError, setAiError] = useState('')
   const [showAdminPanel, setShowAdminPanel] = useState(false)
   const timerRef = useRef(null)
 
@@ -1221,6 +1240,23 @@ function MonitorApp({ user, token, onLogout }) {
       setComparisonData(null)
     } finally {
       setComparisonLoading(false)
+    }
+  }, [])
+
+  const loadAiAnalysis = useCallback(async () => {
+    setAiLoading(true)
+    setAiError('')
+    try {
+      const response = await fetch(`${API_BASE}/api/ai-analysis`)
+      if (!response.ok) throw new Error('AI 分析接口返回错误')
+      const data = await response.json()
+      if (!data || typeof data.risk_level !== 'string') throw new Error('AI 分析响应异常')
+      setAiAnalysis(data)
+    } catch {
+      setAiAnalysis(null)
+      setAiError('AI 分析暂不可用')
+    } finally {
+      setAiLoading(false)
     }
   }, [])
 
@@ -1482,6 +1518,7 @@ function MonitorApp({ user, token, onLogout }) {
 
         <nav className="top-nav" aria-label="页面导航">
           <button type="button" onClick={() => scrollToSection('overview')}>总览</button>
+          <button type="button" onClick={() => scrollToSection('ai')}>AI 分析</button>
           <button type="button" onClick={() => scrollToSection('map')}>地图</button>
           <button type="button" onClick={() => scrollToSection('current')}>实时数据</button>
           <button type="button" onClick={() => scrollToSection('rainfall')}>雨情</button>
@@ -1562,6 +1599,116 @@ function MonitorApp({ user, token, onLogout }) {
             </div>
           </section>
         )}
+
+        <section className="ai-analysis-section" id="ai" aria-label="AI 智能水情分析">
+          <div className="ai-header">
+            <h2>AI 智能水情分析</h2>
+            <span className="ai-source-tag">分析来源：规则分析（暂未接入外部 AI 模型）</span>
+          </div>
+          <div className="ai-actions">
+            <button
+              type="button"
+              className="ai-run-btn"
+              onClick={loadAiAnalysis}
+              disabled={aiLoading}
+            >
+              {aiLoading ? '正在分析...' : '运行智能分析'}
+            </button>
+            <span className="ai-hint">按需生成，不随自动轮询刷新</span>
+          </div>
+          {aiError && (
+            <p className="notice error" role="alert">
+              {aiError}，请稍后重试。其他水情功能不受影响。
+            </p>
+          )}
+          {!aiLoading && !aiError && aiAnalysis === null && (
+            <p className="notice">
+              点击「运行智能分析」获取当前水情风险判断、关键发现与建议。
+            </p>
+          )}
+          {aiAnalysis && (
+            <div className="ai-result">
+              <div className="ai-overview-row">
+                <div className={`ai-risk-pill ${aiRiskClass(aiAnalysis.risk_level)}`}>
+                  <span className="ai-risk-label">AI 风险等级</span>
+                  <strong className="ai-risk-value">{aiRiskLabel(aiAnalysis.risk_level)}</strong>
+                  <small className="ai-risk-score">风险评分 {aiAnalysis.risk_score || 0} / 100</small>
+                </div>
+                <div className="ai-summary-wrap">
+                  <p className="ai-summary">{aiAnalysis.summary || '暂无总体判断'}</p>
+                  {aiAnalysis.analysis_source && (
+                    <p className="ai-source-note">
+                      分析来源：{aiAnalysis.analysis_source === 'rule_based' ? '规则分析（暂未接入外部 AI 模型）' : aiAnalysis.analysis_source}
+                      {aiAnalysis.generated_at ? `　生成时间：${formatUpdateTime(aiAnalysis.generated_at)}` : ''}
+                    </p>
+                  )}
+                  {aiAnalysis.note && <p className="ai-note">{aiAnalysis.note}</p>}
+                </div>
+              </div>
+
+              <div className="ai-grid">
+                <div className="ai-block">
+                  <h3>关键发现</h3>
+                  {(Array.isArray(aiAnalysis.key_findings) ? aiAnalysis.key_findings : []).length > 0 ? (
+                    <ul className="ai-list">
+                      {(Array.isArray(aiAnalysis.key_findings) ? aiAnalysis.key_findings : []).map((f, i) => (
+                        <li key={i}>{f}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="ai-empty">暂无关键发现</p>
+                  )}
+                </div>
+                <div className="ai-block">
+                  <h3>趋势分析</h3>
+                  <p className="ai-overall-trend">
+                    {aiAnalysis.trend_analysis && aiAnalysis.trend_analysis.overall}
+                  </p>
+                  {(Array.isArray(aiAnalysis.trend_analysis && aiAnalysis.trend_analysis.stations) ? aiAnalysis.trend_analysis.stations : []).length > 0 ? (
+                    <ul className="ai-list">
+                      {aiAnalysis.trend_analysis.stations.slice(0, 5).map((t, i) => (
+                        <li key={t.station_id || i}>{t.station_name}：{t.description}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="ai-empty">暂无趋势数据</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="ai-grid">
+                <div className="ai-block">
+                  <h3>重点关注站点</h3>
+                  {(Array.isArray(aiAnalysis.abnormal_stations) ? aiAnalysis.abnormal_stations : []).length > 0 ? (
+                    <ul className="ai-station-list">
+                      {aiAnalysis.abnormal_stations.map((s) => (
+                        <li key={s.station_id}>
+                          <span className="ai-station-name">{s.station_name}</span>
+                          <span className={`ai-risk-chip ${aiRiskClass(s.risk_level)}`}>{aiRiskLabel(s.risk_level)}</span>
+                          <span className="ai-station-meta">水位 {Number(s.water_level).toFixed(2)} m</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="ai-empty">当前无异常关注站点</p>
+                  )}
+                </div>
+                <div className="ai-block">
+                  <h3>建议</h3>
+                  {(Array.isArray(aiAnalysis.recommendations) ? aiAnalysis.recommendations : []).length > 0 ? (
+                    <ul className="ai-list">
+                      {aiAnalysis.recommendations.map((r, i) => (
+                        <li key={i}>{r}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="ai-empty">暂无建议</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
 
         <StationMap
           stations={stations}
