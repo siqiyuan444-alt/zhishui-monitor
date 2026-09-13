@@ -4,6 +4,7 @@ import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import './App.css'
+import { createPollGuard } from './pollingGuard'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
 
@@ -1000,6 +1001,15 @@ function MonitorApp({ user, token, onLogout }) {
   const [aiError, setAiError] = useState('')
   const [showAdminPanel, setShowAdminPanel] = useState(false)
   const timerRef = useRef(null)
+  const mountedRef = useRef(true)
+  const waterPollGuard = useRef(createPollGuard()).current
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   // ── 第14阶段：历史分析状态 ──
   const [historyRange, setHistoryRange] = useState('24h')
@@ -1161,8 +1171,20 @@ function MonitorApp({ user, token, onLogout }) {
     }
   }, [])
 
-  const loadWaterData = useCallback(async (stationId) => {
-    setIsLoading(true)
+  const loadWaterData = useCallback(async (stationId, options = {}) => {
+    const { silent = false, skipBusy = false } = options
+    const handle = waterPollGuard.begin({ skipBusy })
+    if (!handle) return
+    const canWrite = () => mountedRef.current && handle.isCurrent()
+
+    if (!mountedRef.current) {
+      waterPollGuard.end(handle.gen)
+      return
+    }
+
+    if (!silent) {
+      setIsLoading(true)
+    }
     setErrorMessage('')
     setDataErrorMessage('')
 
@@ -1176,7 +1198,7 @@ function MonitorApp({ user, token, onLogout }) {
       const data = await response.json()
 
       if (data.error) {
-        setErrorMessage(data.error)
+        if (canWrite()) setErrorMessage(data.error)
         return
       }
 
@@ -1187,26 +1209,34 @@ function MonitorApp({ user, token, onLogout }) {
         Number.isFinite(data.warning_level)
 
       if (!hasValidLevels) {
-        setDataErrorMessage('水情数据异常')
+        if (canWrite()) setDataErrorMessage('水情数据异常')
         return
       }
 
-      setWaterData(data)
-      await Promise.allSettled([
-        loadHistoryData(stationId),
-        loadOverview(),
-        loadRainfallSummary(stationId),
-        loadWarnings(),
-        loadWarningSummary(),
-        loadLatestWarnings(),
-        loadAlertSummary(),
-      ])
+      if (canWrite()) {
+        setWaterData(data)
+      }
+
+      if (canWrite()) {
+        await Promise.allSettled([
+          loadHistoryData(stationId),
+          loadOverview(),
+          loadRainfallSummary(stationId),
+          loadWarnings(),
+          loadWarningSummary(),
+          loadLatestWarnings(),
+          loadAlertSummary(),
+        ])
+      }
     } catch {
-      setErrorMessage('无法连接水情监测服务器')
+      if (canWrite()) setErrorMessage('无法连接水情监测服务器')
     } finally {
-      setIsLoading(false)
+      waterPollGuard.end(handle.gen)
+      if (canWrite() && !silent) {
+        setIsLoading(false)
+      }
     }
-  }, [loadHistoryData, loadOverview, loadRainfallSummary, loadWarnings, loadWarningSummary, loadLatestWarnings, loadAlertSummary])
+  }, [waterPollGuard, loadHistoryData, loadOverview, loadRainfallSummary, loadWarnings, loadWarningSummary, loadLatestWarnings, loadAlertSummary])
 
   const loadHistoryAnalysis = useCallback(async (stationId, hours) => {
     setAnalysisLoading(true)
@@ -1356,7 +1386,7 @@ function MonitorApp({ user, token, onLogout }) {
       clearInterval(timerRef.current)
     }
     timerRef.current = setInterval(() => {
-      loadWaterData(selectedStationId)
+      loadWaterData(selectedStationId, { silent: true, skipBusy: true })
     }, 10000)
 
     return () => {

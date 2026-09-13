@@ -163,6 +163,7 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_water_data_station_time ON water_data (station_id, created_at)"
     )
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_water_data_created ON water_data (created_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_water_data_station_id ON water_data (station_id, id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_warning_records_status ON warning_records (status)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_warning_records_created ON warning_records (created_at)")
     ensure_history_backfill(conn)
@@ -414,12 +415,12 @@ def get_all_latest_water_data() -> list:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT w.id, w.station_id, w.station_name, w.water_level, w.warning_level, w.rainfall, w.status, w.source, w.data_quality, w.created_at
-        FROM water_data w
-        INNER JOIN (
-            SELECT station_id, MAX(id) as max_id FROM water_data GROUP BY station_id
-        ) latest ON w.id = latest.max_id
-        ORDER BY w.station_id
+        SELECT id, station_id, station_name, water_level, warning_level, rainfall, status, source, data_quality, created_at
+        FROM water_data
+        WHERE id IN (
+            SELECT MAX(id) FROM water_data GROUP BY station_id
+        )
+        ORDER BY station_id
     """)
     rows = cursor.fetchall()
     conn.close()
