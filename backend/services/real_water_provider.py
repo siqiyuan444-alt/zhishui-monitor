@@ -136,7 +136,11 @@ def _http_get_json(url: str, params: dict, headers: dict, timeout: float):
         raise ChengduApiError("network", f"网络/DNS 错误: {exc}")  # noqa: B904
 
     if response.status_code >= 400:
-        raise ChengduApiError("http", f"HTTP {response.status_code}")
+        raise ChengduApiError(
+            "http",
+            f"HTTP {response.status_code}",
+            status_code=response.status_code,
+        )
 
     try:
         return response.json()
@@ -147,8 +151,9 @@ def _http_get_json(url: str, params: dict, headers: dict, timeout: float):
 class ChengduApiError(ProviderError):
     """成都官方 API 调用异常，kind 标识错误类别。"""
 
-    def __init__(self, kind: str, message: str = ""):
+    def __init__(self, kind: str, message: str = "", status_code: int = None):
         self.kind = kind
+        self.status_code = status_code
         super().__init__(f"[{kind}] {message}")
 
 
@@ -198,6 +203,95 @@ class RealWaterProvider(WaterDataProvider):
             raise ProviderNotConfiguredError("成都官方数据源未配置 Client ID（CHENGDU_CLIENT_ID）")
         if not self.client_secret:
             raise ProviderNotConfiguredError("成都官方数据源未配置 Client Secret（CHENGDU_CLIENT_SECRET）")
+
+    # ── 连通性诊断 ──
+
+    def check_connection(self) -> dict:
+        """成都官方数据源连通性诊断（内部测试能力，供后端调用/诊断 API 使用）。
+
+        验证：
+            1. 环境变量是否配置（Client ID / Client Secret / API Base URL）
+            2. 签名是否能够生成
+            3. HTTP 请求是否能够发送 / API HTTP status
+            4. 认证是否通过（401/403 视为未通过）
+            5. 返回数据是否有效（存在 drp/dyp 雨量字段）
+
+        安全约定：
+            - 绝不返回 / 打印 Client Secret、完整 Authorization、Signature 或敏感环境变量值；
+            - 只返回 configured / reachable / authenticated / data_valid 等布尔标记与说明文本。
+            若未配置真实的官方测站编码，不会发起任何对外请求（禁止编造/猜测 stcd）。
+        """
+        result = {
+            "provider": self.name,
+            "display_name": self.display_name,
+            "configured": False,
+            "signature_ok": False,
+            "reachable": False,
+            "authenticated": False,
+            "data_valid": False,
+            "data_quality": QUALITY_DEGRADED,
+            "tested_stcd": False,
+            "reason": "",
+        }
+
+        if not self.base_url:
+            result["reason"] = "未配置 CHENGDU_API_BASE_URL"
+            return result
+        if not self.client_id:
+            result["reason"] = "未配置 CHENGDU_CLIENT_ID"
+            return result
+        if not self.client_secret:
+            result["reason"] = "未配置 CHENGDU_CLIENT_SECRET"
+            return result
+        result["configured"] = True
+
+        try:
+            build_signature(self.client_id, current_timestamp_ms(), generate_nonce(), self.client_secret)
+            result["signature_ok"] = True
+        except Exception:  # noqa: BLE001 - 签名失败不崩溃
+            result["reason"] = "签名生成失败"
+            return result
+
+        real_stcd = next((code for code in self.station_codes.values() if code), "")
+        if not real_stcd:
+            result["reason"] = "未配置官方测站编码(stcd)，禁止编造/猜测编码，未发起真实请求"
+            return result
+        result["tested_stcd"] = True
+
+        try:
+            payload = _http_get_json(
+                self.base_url,
+                params={"stcd": real_stcd},
+                headers=self._build_headers(),
+                timeout=self.timeout,
+            )
+        except ChengduApiError as exc:
+            if exc.kind == "http":
+                result["reachable"] = True  # 服务器可达（返回了 HTTP 状态码）
+                if exc.status_code in (401, 403):
+                    result["reason"] = f"服务器可达，但认证/授权失败（HTTP {exc.status_code}）"
+                else:
+                    result["reason"] = f"服务器可达，但返回 HTTP {exc.status_code}"
+            elif exc.kind in ("timeout", "network"):
+                result["reason"] = f"无法连接官方接口: {exc}"
+            else:
+                result["reachable"] = True
+                result["reason"] = f"接口可达，但响应内容异常: {exc}"
+            return result
+
+        result["reachable"] = True
+        result["authenticated"] = True  # 未收到 401/403，视为认证通过
+        records = _extract_records(payload)
+        row = next((r for r in records if _looks_like_record(r)), None)
+        drp = _safe_float(row.get("drp")) if row else None
+        dyp = _safe_float(row.get("dyp")) if row else None
+        if drp is None and dyp is None:
+            result["reason"] = "服务器可达，但响应中不存在有效雨情记录（缺少 drp/dyp）"
+            return result
+        result["data_valid"] = True
+        result["data_quality"] = QUALITY_GOOD if drp is not None else QUALITY_DEGRADED
+        result["reason"] = "连接成功"
+        return result
 
     # ── 接口请求 ──
 
@@ -326,6 +420,8 @@ class RealWaterProvider(WaterDataProvider):
     def get_current_data(self) -> list:
         """返回全部站点当前数据，逐站尝试真实雨情；请求级失败时抛错交给采集器兜底。"""
         self._check_configured()
+        if not any(c for c in self.station_codes.values() if c):
+            raise ProviderNotConfiguredError("未配置官方测站编码")
         records = []
         for station in STATIONS:
             stcd = self.get_station_code(station["station_id"])

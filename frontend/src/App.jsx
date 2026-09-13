@@ -72,6 +72,43 @@ function formatAxisTime(value, is7d) {
   return is7d ? `${mm}/${dd} ${hh}:${mi}` : `${hh}:${mi}`
 }
 
+function sourceText(source) {
+  switch (source) {
+    case 'chengdu_open_data':
+      return '成都政务开放数据'
+    case 'mock_fallback':
+      return '模拟数据（自动降级）'
+    case 'invalid_fallback':
+      return '模拟数据'
+    case 'mock':
+      return '模拟数据'
+    default:
+      return source || '未知'
+  }
+}
+
+function qualityText(quality) {
+  switch ((quality || '').toLowerCase()) {
+    case 'good':
+    case 'valid':
+    case 'normal':
+      return '良好'
+    case 'degraded':
+    case 'fallback':
+    case 'invalid':
+      return '降级'
+    default:
+      return quality || '未知'
+  }
+}
+
+function formatUpdateTime(value) {
+  if (!value) return ''
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return value
+  return d.toLocaleString('zh-CN', { hour12: false })
+}
+
 function waterCompareOption(data, range) {
   const is7d = range === '168h'
   return {
@@ -1193,6 +1230,17 @@ function MonitorApp({ user, token, onLogout }) {
         {waterData && (
           <>
             <p className="station-name">水文站：{waterData.station_name}</p>
+            <section className="data-source-row" aria-label="数据来源与质量">
+              <span className={`source-badge source-${String(waterData.source || 'mock').replace(/_/g, '-')}`}>
+                数据来源：{sourceText(waterData.source)}
+              </span>
+              <span className={`quality-badge quality-${String(waterData.data_quality || 'valid').toLowerCase()}`}>
+                数据质量：{qualityText(waterData.data_quality)}
+              </span>
+              {waterData.updated_at && (
+                <span className="update-time">更新：{formatUpdateTime(waterData.updated_at)}</span>
+              )}
+            </section>
             <section className="data-cards" aria-label="当前水情数据">
               <article className="data-card water-level-card">
                 <span>当前水位</span>

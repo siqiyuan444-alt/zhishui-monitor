@@ -55,6 +55,7 @@ from services.data_analysis import (
 )
 from services.alert_service import create_alert_if_needed
 from services.water_data_provider import get_provider, ProviderError
+from services.real_water_provider import RealWaterProvider
 from services.data_normalizer import (
     SOURCE_CHENGDU_OPEN_DATA,
     SOURCE_MOCK_FALLBACK,
@@ -362,12 +363,31 @@ def get_water_data_all():
 @app.get("/api/data-source")
 def data_source():
     provider = get_provider()
-    return {
+    result = {
         "source": provider.name,
         "name": provider.name,
         "display_name": provider.display_name,
         "configured": provider.is_configured(),
     }
+    if isinstance(provider, RealWaterProvider):
+        status = provider.check_connection()
+    else:
+        status = {
+            "provider": provider.name,
+            "display_name": provider.display_name,
+            "configured": False,
+            "signature_ok": False,
+            "reachable": False,
+            "authenticated": False,
+            "data_valid": False,
+            "data_quality": QUALITY_DEGRADED,
+            "tested_stcd": False,
+            "reason": "未启用成都官方数据源（缺少 CHENGDU_CLIENT_ID / CHENGDU_CLIENT_SECRET 配置）",
+        }
+    result["status"] = status
+    result["reachable"] = status["reachable"]
+    result["data_quality"] = status["data_quality"]
+    return result
 
 
 @app.get("/api/data-quality")

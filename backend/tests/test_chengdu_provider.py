@@ -26,6 +26,7 @@
 import json
 import sys
 import os
+from datetime import datetime
 
 import pytest
 
@@ -411,3 +412,263 @@ def test_report_api_regression_existing():
     resp = client.get("/api/report?station_id=ST001&hours=24")
     assert resp.status_code == 200
     assert "data" in resp.json()
+
+
+# ──────────────────────────── 18C: 连接测试（check_connection） ────────────────────────────
+
+def _assert_no_http_request(url, params, headers, timeout):
+    raise AssertionError("未配置真实 stcd 时禁止发起网络请求")
+
+
+def test_connectivity_missing_client_id(monkeypatch):
+    provider = _make_provider(monkeypatch, CHENGDU_CLIENT_ID="", CHENGDU_STATION_CODES="{}")
+    monkeypatch.setattr("services.real_water_provider._http_get_json", _assert_no_http_request)
+    status = provider.check_connection()
+    assert status["configured"] is False
+    assert status["signature_ok"] is False
+    assert status["reachable"] is False
+    assert status["tested_stcd"] is False
+    assert "CHENGDU_CLIENT_ID" in status["reason"]
+
+
+def test_connectivity_missing_client_secret(monkeypatch):
+    provider = _make_provider(monkeypatch, CHENGDU_CLIENT_SECRET="", CHENGDU_STATION_CODES="{}")
+    monkeypatch.setattr("services.real_water_provider._http_get_json", _assert_no_http_request)
+    status = provider.check_connection()
+    assert status["configured"] is False
+    assert "CHENGDU_CLIENT_SECRET" in status["reason"]
+
+
+def test_connectivity_missing_base_url(monkeypatch):
+    provider = _make_provider(monkeypatch, CHENGDU_STATION_CODES="{}")
+    provider.base_url = ""
+    monkeypatch.setattr("services.real_water_provider._http_get_json", _assert_no_http_request)
+    status = provider.check_connection()
+    assert status["configured"] is False
+    assert "CHENGDU_API_BASE_URL" in status["reason"]
+
+
+def test_connectivity_no_stcd_does_not_call_api(monkeypatch):
+    provider = _make_provider(monkeypatch, CHENGDU_STATION_CODES="{}")
+    monkeypatch.setattr("services.real_water_provider._http_get_json", _assert_no_http_request)
+    status = provider.check_connection()
+    assert status["configured"] is True
+    assert status["signature_ok"] is True
+    assert status["reachable"] is False
+    assert status["authenticated"] is False
+    assert status["data_valid"] is False
+    assert status["tested_stcd"] is False
+    assert "stcd" in status["reason"]
+
+
+def test_connectivity_no_stcd_does_not_leak_secret(monkeypatch):
+    provider = _make_provider(
+        monkeypatch, CHENGDU_CLIENT_SECRET="must-not-leak-abc", CHENGDU_STATION_CODES="{}"
+    )
+    monkeypatch.setattr("services.real_water_provider._http_get_json", _assert_no_http_request)
+    status = provider.check_connection()
+    text = json.dumps(status, ensure_ascii=False)
+    assert "must-not-leak-abc" not in text
+    assert "X-Signature" not in text
+    assert "X-Timestamp" not in text
+    assert "X-Nonce" not in text
+
+
+def test_connectivity_success_with_real_stcd(monkeypatch):
+    payload = {"data": [{"stcd": "REAL_TEST_STCD", "tm": "2026-09-12 20:00:00", "drp": 2.5, "dyp": 12.5}]}
+    captured = {}
+
+    def fake_get(url, params, headers, timeout):
+        captured["params"] = params
+        return payload
+
+    monkeypatch.setattr("services.real_water_provider._http_get_json", fake_get)
+    provider = _make_provider(
+        monkeypatch, CHENGDU_STATION_CODES=json.dumps({"ST001": "REAL_TEST_STCD"})
+    )
+    status = provider.check_connection()
+    assert captured["params"] == {"stcd": "REAL_TEST_STCD"}
+    assert status["configured"] is True
+    assert status["signature_ok"] is True
+    assert status["reachable"] is True
+    assert status["authenticated"] is True
+    assert status["data_valid"] is True
+    assert status["data_quality"] == "good"
+    assert status["tested_stcd"] is True
+
+
+def test_connectivity_empty_data_marks_invalid(monkeypatch):
+    monkeypatch.setattr("services.real_water_provider._http_get_json", lambda *a, **k: {"data": []})
+    provider = _make_provider(
+        monkeypatch, CHENGDU_STATION_CODES=json.dumps({"ST001": "REAL_TEST_STCD"})
+    )
+    status = provider.check_connection()
+    assert status["configured"] is True
+    assert status["reachable"] is True
+    assert status["authenticated"] is True
+    assert status["data_valid"] is False
+    assert status["tested_stcd"] is True
+
+
+def test_connectivity_http_401_authenticated_false(monkeypatch):
+    def fake_get(*a, **k):
+        raise rwp.ChengduApiError("http", "HTTP 401", status_code=401)
+
+    monkeypatch.setattr("services.real_water_provider._http_get_json", fake_get)
+    provider = _make_provider(
+        monkeypatch, CHENGDU_STATION_CODES=json.dumps({"ST001": "REAL_TEST_STCD"})
+    )
+    status = provider.check_connection()
+    assert status["configured"] is True
+    assert status["reachable"] is True
+    assert status["authenticated"] is False
+    assert status["data_valid"] is False
+
+
+def test_connectivity_timeout_marks_unreachable(monkeypatch):
+    def fake_get(*a, **k):
+        raise rwp.ChengduApiError("timeout", "超时")
+
+    monkeypatch.setattr("services.real_water_provider._http_get_json", fake_get)
+    provider = _make_provider(
+        monkeypatch, CHENGDU_STATION_CODES=json.dumps({"ST001": "REAL_TEST_STCD"})
+    )
+    status = provider.check_connection()
+    assert status["configured"] is True
+    assert status["signature_ok"] is True
+    assert status["reachable"] is False
+    assert status["tested_stcd"] is True
+
+
+# ──────────────────────────── 18C: 异常保护（HTTP 400/401/403 + 字段缺失） ────────────────────────────
+
+@pytest.mark.parametrize("code", [400, 401, 403, 500])
+def test_http_error_statuses_trigger_fallback(monkeypatch, code):
+    from services.data_collector import DataCollector
+
+    def fake_get(*a, **k):
+        raise rwp.ChengduApiError("http", f"HTTP {code}", status_code=code)
+
+    monkeypatch.setattr("services.real_water_provider._http_get_json", fake_get)
+    provider = _make_provider(
+        monkeypatch, CHENGDU_STATION_CODES=json.dumps({"ST001": "REAL_TEST_STCD"})
+    )
+    collector = DataCollector(provider=provider)
+    report = collector.collect_all()
+    assert report["status"] == "fallback"
+    assert report["source"] == "mock_fallback"
+    for rec in report["records"]:
+        assert rec["source"] == "mock_fallback"
+        assert rec["data_quality"] == "degraded"
+
+
+def test_missing_tm_falls_back_to_now(monkeypatch):
+    rec = {"stcd": "REAL_TEST_STCD", "drp": 3.0, "dyp": 9.0}
+    monkeypatch.setattr("services.real_water_provider._http_get_json", lambda *a, **k: {"data": [rec]})
+    provider = _make_provider(
+        monkeypatch, CHENGDU_STATION_CODES=json.dumps({"ST001": "REAL_TEST_STCD"})
+    )
+    record = provider.get_station_data("ST001")
+    assert record["source"] == "chengdu_open_data"
+    assert record["rainfall"] == 3.0
+    parsed = datetime.fromisoformat(record["timestamp"])
+    assert parsed.year >= 2020  # 未提供 tm 时回退到当前时间而非崩溃
+
+
+def test_missing_wth_and_optional_fields_still_ok(monkeypatch):
+    rec = {"stcd": "REAL_TEST_STCD", "tm": "2026-09-12 20:00:00", "drp": 1.2}
+    monkeypatch.setattr("services.real_water_provider._http_get_json", lambda *a, **k: {"data": [rec]})
+    provider = _make_provider(
+        monkeypatch, CHENGDU_STATION_CODES=json.dumps({"ST001": "REAL_TEST_STCD"})
+    )
+    record = provider.get_station_data("ST001")
+    assert record["rainfall"] == 1.2
+    assert record["official:wth"] is None
+
+
+def test_collector_no_stcd_auto_fallback(monkeypatch):
+    from services.data_collector import DataCollector
+
+    provider = _make_provider(monkeypatch, CHENGDU_STATION_CODES="{}")
+    collector = DataCollector(provider=provider)
+    report = collector.collect_all()
+    assert report["status"] == "fallback"
+    assert report["source"] == "mock_fallback"
+    assert report["record_count"] == 5
+    for rec in report["records"]:
+        assert rec["source"] == "mock_fallback"
+        assert rec["data_quality"] == "degraded"
+
+
+# ──────────────────────────── 18C: 成功数据 + 签名安全 ────────────────────────────
+
+def test_real_test_stcd_success_fields(monkeypatch):
+    payload = {
+        "data": [
+            {
+                "tm": "2026-09-12 20:00:00",
+                "stcd": "REAL_TEST_STCD",
+                "pdr": 60,
+                "last_modify_time": 1234567890,
+                "id": 1,
+                "flag": 1,
+                "dyp": 12.5,
+                "drp": 2.5,
+                "intv": 60,
+                "wth": "小雨",
+            }
+        ]
+    }
+    monkeypatch.setattr("services.real_water_provider._http_get_json", lambda *a, **k: payload)
+    provider = _make_provider(
+        monkeypatch, CHENGDU_STATION_CODES=json.dumps({"ST001": "REAL_TEST_STCD"})
+    )
+    record = provider.get_station_data("ST001")
+    assert record["official:stcd"] == "REAL_TEST_STCD"
+    assert record["rainfall"] == 2.5            # drp → rainfall
+    assert record["official:dyp"] == 12.5       # dyp 仅在官方字段中保留，不覆盖 rainfall
+    assert record["rainfall_origin"] == "drp"
+    assert record["timestamp"].startswith("2026-09-12T20:00:00")  # tm → collection_time
+    assert record["official:wth"] == "小雨"      # wth → 天气状态
+    assert record["data_quality"] == "good"
+    assert record["water_level"] != 2.5
+    assert record["water_level"] != 12.5
+
+
+def test_client_secret_not_transmitted_in_headers(monkeypatch):
+    captured = {}
+
+    def fake_get(url, params, headers, timeout):
+        captured["headers"] = headers
+        return {"data": [{"stcd": "REAL_TEST_STCD", "tm": "2026-09-12 10:00:00", "drp": 5}]}
+
+    monkeypatch.setattr("services.real_water_provider._http_get_json", fake_get)
+    provider = _make_provider(
+        monkeypatch,
+        CHENGDU_CLIENT_SECRET="hush-secret-9",
+        CHENGDU_STATION_CODES=json.dumps({"ST001": "REAL_TEST_STCD"}),
+    )
+    provider.get_station_data("ST001")
+    header_text = json.dumps(captured["headers"])
+    assert "hush-secret-9" not in header_text  # Client Secret 只作为 HMAC key
+    assert list(captured["headers"].keys()) == ["X-Client-Id", "X-Timestamp", "X-Nonce", "X-Signature"]
+
+
+def test_data_source_endpoint_no_secret_leak(monkeypatch):
+    monkeypatch.delenv("WATER_DATA_PROVIDER", raising=False)
+    monkeypatch.setenv("CHENGDU_CLIENT_ID", "leak-check-client")
+    monkeypatch.setenv("CHENGDU_CLIENT_SECRET", "leak-check-secret-value")
+    monkeypatch.setenv("CHENGDU_STATION_CODES", "{}")
+    resp = client.get("/api/data-source")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["source"] == "chengdu_open_data"
+    assert body["status"]["configured"] is True
+    assert body["status"]["signature_ok"] is True
+    assert body["status"]["reachable"] is False
+    assert body["status"]["tested_stcd"] is False
+    text = json.dumps(body, ensure_ascii=False)
+    assert "leak-check-secret-value" not in text
+    assert "leak-check-client" not in text
+    assert "X-Signature" not in text
+    assert "X-Timestamp" not in text

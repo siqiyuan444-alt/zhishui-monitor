@@ -75,9 +75,56 @@ h1 {
 }
 
 .station-name {
-  margin: 0 0 16px;
+  margin: 0 0 8px;
   color: #31515c;
   font-weight: 700;
+}
+
+.data-source-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 16px;
+  font-size: 13px;
+}
+
+.source-badge,
+.quality-badge,
+.update-time {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  color: #31515c;
+  background: #eef7fa;
+  border: 1px solid #d8e8ed;
+}
+
+.source-badge {
+  background: #e8f6ef;
+  border-color: #bfe6d2;
+  color: #176b3f;
+}
+
+.quality-badge {
+  background: #a9d7f5;
+  border-color: #7db8e6;
+  color: #123c54;
+}
+
+.quality-degraded,
+.quality-fallback,
+.quality-invalid {
+  background: #fbe9cf;
+  border-color: #f0cf9a;
+  color: #7a4a06;
+}
+
+.update-time {
+  background: transparent;
+  border-style: dashed;
+  color: #58727b;
 }
 
 .data-cards {
