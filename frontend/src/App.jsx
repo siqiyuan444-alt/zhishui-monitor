@@ -543,6 +543,10 @@ function AdminPanel({ token, onBack, onLogout, onGoStation }) {
         headers: { Authorization: `Bearer ${token}` },
       })
       if (handleUnauthorized(response)) return
+      if (response.status === 403) {
+        setError('权限不足：当前账号没有管理员权限')
+        return
+      }
       if (response.ok) {
         const result = await response.json()
         setUsers(result.data)
@@ -1248,13 +1252,14 @@ function MonitorApp({ user, token, onLogout }) {
     setAiError('')
     try {
       const response = await fetch(`${API_BASE}/api/ai-analysis`)
+      if (response.status === 429) throw new Error('AI 分析请求过于频繁，请稍后重试')
       if (!response.ok) throw new Error('AI 分析接口返回错误')
       const data = await response.json()
       if (!data || typeof data.risk_level !== 'string') throw new Error('AI 分析响应异常')
       setAiAnalysis(data)
-    } catch {
+    } catch (err) {
       setAiAnalysis(null)
-      setAiError('AI 分析暂不可用')
+      setAiError(err && err.message ? err.message : 'AI 分析暂不可用')
     } finally {
       setAiLoading(false)
     }

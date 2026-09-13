@@ -16,8 +16,10 @@ DB_PATH = os.environ.get("WATER_MONITOR_DB_PATH") or os.path.join(DB_DIR, "water
 
 def get_connection():
     os.makedirs(DB_DIR, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 
@@ -160,6 +162,9 @@ def init_db():
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_water_data_station_time ON water_data (station_id, created_at)"
     )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_water_data_created ON water_data (created_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_warning_records_status ON warning_records (status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_warning_records_created ON warning_records (created_at)")
     ensure_history_backfill(conn)
 
     _init_users(conn)

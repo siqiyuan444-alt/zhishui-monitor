@@ -1,17 +1,19 @@
 import csv
 import io
+import logging
 import os
 import secrets
 import sys
 from datetime import datetime, timedelta
 
 import jwt
-from fastapi import FastAPI, Query, HTTPException, Depends, Header
+from fastapi import FastAPI, Query, HTTPException, Depends, Header, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, Response
 from passlib.hash import argon2
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from database import (
     get_stations,
@@ -52,7 +54,8 @@ from services.data_analysis import (
     DEFAULT_FORECAST_HORIZON,
 )
 from services.alert_service import create_alert_if_needed
-from services.ai_analysis_service import generate_ai_analysis
+from services.ai_analysis_service import generate_ai_analysis, get_ai_analyzer
+from services.rate_limiter import allow_ai_request
 from services.water_data_provider import get_provider, ProviderError
 from services.real_water_provider import RealWaterProvider
 from services.mock_water_provider import build_mock_record
@@ -62,6 +65,8 @@ from services.data_normalizer import (
     QUALITY_DEGRADED,
     QUALITY_VALID,
 )
+
+logger = logging.getLogger("water_monitor")
 
 JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "")
 if not JWT_SECRET_KEY:
@@ -95,28 +100,73 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── 第21阶段：安全响应头（应用级中间件，统一注入到所有响应）──
+_CSP_POLICY = (
+    "default-src 'self'; "
+    "script-src 'self'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: https://*.tile.openstreetmap.org; "
+    "font-src 'self' data:; "
+    "connect-src 'self' http://127.0.0.1:8000 http://localhost:8000 "
+    "ws://localhost:5173 ws://127.0.0.1:5173; "
+    "object-src 'none'; base-uri 'self'; frame-ancestors 'self';"
+)
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    if os.environ.get("ENABLE_CSP", "1") not in ("0", "false", "False"):
+        response.headers.setdefault("Content-Security-Policy", _CSP_POLICY)
+    return response
+
+
+# ── 第21阶段：统一异常处理，避免向客户端泄露内部实现细节 ──
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=exc.headers,
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(status_code=422, content={"detail": exc.errors()})
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.exception("未处理异常: method=%s path=%s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "服务器内部错误。请稍后重试。"})
+
+
 _dist_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend", "dist")
 
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(max_length=64)
+    password: str = Field(max_length=200)
 
 
 class RegisterRequest(BaseModel):
-    username: str
-    password: str
-    confirm_password: str = ""
+    username: str = Field(max_length=30)
+    password: str = Field(max_length=200)
+    confirm_password: str = Field(default="", max_length=200)
 
 
 class CreateUserRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(max_length=30)
+    password: str = Field(max_length=200)
     role: str = "user"
 
 
 class UpdateRoleRequest(BaseModel):
-    role: str
+    role: str = Field(min_length=1, max_length=32)
 
 
 def create_access_token(data: dict) -> str:
@@ -151,15 +201,28 @@ def require_admin(user: dict = Depends(get_current_user)):
     return user
 
 
+# 防时序探测：用户不存在时也执行一次 Argon2 校验，避免通过响应时间猜测用户名。
+_DUMMY_PASSWORD_HASH = argon2.hash("timing-equalizer-dummy-password")
+
+
 # ──────────────────────────── Auth API ────────────────────────────
 
 @app.post("/api/auth/login")
 def login(req: LoginRequest):
     user = get_user_by_username(req.username)
     if not user:
+        try:
+            argon2.verify(req.password, _DUMMY_PASSWORD_HASH)
+        except Exception:
+            pass
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     if not user["is_active"]:
-        raise HTTPException(status_code=403, detail="账户已被禁用")
+        # 禁用账号与“用户不存在/密码错误”返回一致，不泄露账号是否存在
+        try:
+            argon2.verify(req.password, user["password_hash"])
+        except Exception:
+            pass
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
     if not argon2.verify(req.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     token = create_access_token({"user_id": user["id"], "username": user["username"], "role": user["role"]})
@@ -299,7 +362,7 @@ def _build_current_record(station: dict) -> dict:
 
 
 @app.get("/api/water-data")
-def get_water_data(station_id: str = Query(default="ST001")):
+def get_water_data(station_id: str = Query(default="ST001", max_length=40)):
     station = get_station_by_id(station_id)
     if not station:
         return {"error": f"水文站 {station_id} 不存在"}
@@ -389,7 +452,7 @@ def data_quality():
 
 @app.get("/api/water-history")
 def water_history(
-    station_id: str = Query(default="ST001"),
+    station_id: str = Query(default="ST001", max_length=40),
     limit: int = Query(default=20, ge=1, le=500),
 ):
     data = get_water_history(station_id=station_id, limit=limit)
@@ -397,7 +460,7 @@ def water_history(
 
 
 @app.get("/api/rainfall-summary")
-def rainfall_summary(station_id: str = Query(default="ST001")):
+def rainfall_summary(station_id: str = Query(default="ST001", max_length=40)):
     data = get_rainfall_summary(station_id=station_id)
     return data
 
@@ -446,7 +509,7 @@ def _get_station_or_404(station_id: str):
 
 @app.get("/api/history")
 def history_api(
-    station_id: str = Query(default="ST001"),
+    station_id: str = Query(default="ST001", max_length=40),
     hours: int = Query(default=24, ge=HOURS_MIN, le=HOURS_MAX),
 ):
     station = _get_station_or_404(station_id)
@@ -477,7 +540,7 @@ def history_api(
 
 @app.get("/api/trend")
 def trend_api(
-    station_id: str = Query(default="ST001"),
+    station_id: str = Query(default="ST001", max_length=40),
     hours: int = Query(default=24, ge=HOURS_MIN, le=HOURS_MAX),
 ):
     station = _get_station_or_404(station_id)
@@ -495,7 +558,7 @@ def trend_api(
 
 @app.get("/api/statistics")
 def statistics_api(
-    station_id: str = Query(default="ST001"),
+    station_id: str = Query(default="ST001", max_length=40),
     hours: int = Query(default=24, ge=HOURS_MIN, le=HOURS_MAX),
 ):
     station = _get_station_or_404(station_id)
@@ -540,7 +603,7 @@ def statistics_api(
 
 @app.get("/api/forecast")
 def forecast_api(
-    station_id: str = Query(default="ST001"),
+    station_id: str = Query(default="ST001", max_length=40),
     hours: int = Query(default=24, ge=HOURS_MIN, le=HOURS_MAX),
     horizon_hours: int = Query(default=DEFAULT_FORECAST_HORIZON, ge=1, le=72),
 ):
@@ -581,7 +644,7 @@ def comparison_api(
 
 @app.get("/api/report")
 def report_data_api(
-    station_id: str = Query(default=None),
+    station_id: str = Query(default=None, max_length=40),
     hours: int = Query(default=24, ge=HOURS_MIN, le=HOURS_MAX),
     limit: int = Query(default=None, ge=1, le=10000),
 ):
@@ -604,7 +667,7 @@ def report_data_api(
 
 @app.get("/api/report/statistics")
 def report_statistics_api(
-    station_id: str = Query(default=None),
+    station_id: str = Query(default=None, max_length=40),
     hours: int = Query(default=24, ge=HOURS_MIN, le=HOURS_MAX),
 ):
     if station_id and not get_station_by_id(station_id):
@@ -642,7 +705,7 @@ def report_statistics_api(
 
 @app.get("/api/report/export/csv")
 def report_export_csv(
-    station_id: str = Query(default=None),
+    station_id: str = Query(default=None, max_length=40),
     hours: int = Query(default=24, ge=HOURS_MIN, le=HOURS_MAX),
 ):
     if station_id and not get_station_by_id(station_id):
@@ -672,7 +735,7 @@ def report_export_csv(
 
 @app.get("/api/report/export/excel")
 def report_export_excel(
-    station_id: str = Query(default=None),
+    station_id: str = Query(default=None, max_length=40),
     hours: int = Query(default=24, ge=HOURS_MIN, le=HOURS_MAX),
 ):
     from openpyxl import Workbook
@@ -759,7 +822,7 @@ ALERT_STATUSES = ("pending", "acknowledged", "resolved")
 
 @app.get("/api/alerts")
 def alerts_api(
-    station_id: str = Query(default=None),
+    station_id: str = Query(default=None, max_length=40),
     level: str = Query(default=None),
     status: str = Query(default=None),
     hours: int = Query(default=24, ge=HOURS_MIN, le=HOURS_MAX),
@@ -809,15 +872,40 @@ def alerts_resolve(alert_id: int, admin: dict = Depends(require_admin)):
 # ──────────────────────────── 第20阶段：AI 智能水情分析 ────────────────────────────
 
 
+def _ai_request_identity(request: Request) -> str:
+    """限流身份：优先 JWT 中的 user_id，其次客户端 IP。"""
+    authorization = request.headers.get("authorization", "")
+    if authorization.startswith("Bearer "):
+        try:
+            payload = jwt.decode(authorization[7:], JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+            user_id = payload.get("user_id")
+            if user_id is not None:
+                return f"user:{user_id}"
+        except jwt.InvalidTokenError:
+            pass
+    host = request.client.host if request.client else "unknown"
+    return f"ip:{host}"
+
+
 @app.get("/api/ai-analysis")
-def ai_analysis_api(hours: int = Query(default=24, ge=HOURS_MIN, le=HOURS_MAX)):
+def ai_analysis_api(
+    request: Request,
+    hours: int = Query(default=24, ge=HOURS_MIN, le=HOURS_MAX),
+):
     """按需生成结构化 AI 水情分析（只读，不写库）。
 
     默认规则分析（rule_based）；配置 AI_ANALYZER=openai 后调用真实 AI 模型，
     任何失败都会自动降级为规则分析，绝不向客户端抛出 500。
+    真实 AI 模式受内存滑动窗口限流（默认 10 次/分钟，AI_RATE_LIMIT_PER_MINUTE）。
     """
     try:
+        if get_ai_analyzer().analysis_source == "ai_model":
+            identity = _ai_request_identity(request)
+            if not allow_ai_request(identity):
+                raise HTTPException(status_code=429, detail="AI 分析请求过于频繁，请稍后重试")
         return generate_ai_analysis(hours=hours)
+    except HTTPException:
+        raise
     except Exception:
         return {
             "risk_level": "normal",
@@ -839,6 +927,9 @@ if os.path.isdir(_dist_dir):
     @app.get("/{full_path:path}")
     def serve_spa(full_path: str):
         if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not found")
+        full_path = full_path.replace("\\", "/")
+        if any(part == ".." for part in full_path.split("/")):
             raise HTTPException(status_code=404, detail="Not found")
         if full_path.startswith("assets/"):
             file_path = os.path.join(_dist_dir, full_path)
