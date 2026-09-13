@@ -419,7 +419,7 @@ def warnings_summary():
 
 
 @app.post("/api/warnings/{warning_id}/handle")
-def handle_warning_endpoint(warning_id: int):
+def handle_warning_endpoint(warning_id: int, admin: dict = Depends(require_admin)):
     success = handle_warning(warning_id)
     if not success:
         raise HTTPException(status_code=404, detail=f"预警记录 {warning_id} 不存在")

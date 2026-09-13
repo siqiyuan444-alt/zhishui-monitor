@@ -415,7 +415,43 @@ def test_legacy_warnings_still_show_alert_records():
     assert resp.status_code == 200
     assert any(w["id"] == alert_id for w in resp.json()["data"])
 
-    resp = client.post(f"/api/warnings/{alert_id}/handle")
+    resp = client.post(f"/api/warnings/{alert_id}/handle", headers={"Authorization": f"Bearer {admin_token()}"})
     assert resp.status_code == 200
     resp = client.get("/api/warnings/active")
     assert not any(w["id"] == alert_id for w in resp.json()["data"])
+
+
+def test_warnings_handle_requires_auth():
+    clear_alerts()
+    alert_id = make_alert(station_id="ST001", alert_level="warning")
+    resp = client.post(f"/api/warnings/{alert_id}/handle")
+    assert resp.status_code == 401
+
+
+def test_warnings_handle_requires_admin():
+    clear_alerts()
+    alert_id = make_alert(station_id="ST001", alert_level="warning")
+    resp = client.post(f"/api/warnings/{alert_id}/handle", headers={"Authorization": f"Bearer {user_token()}"})
+    assert resp.status_code == 403
+    conn = database.get_connection()
+    row = conn.cursor().execute(
+        "SELECT is_handled FROM warning_records WHERE id = ?", (alert_id,)
+    ).fetchone()
+    conn.close()
+    assert row["is_handled"] == 0
+
+
+def test_warnings_handle_admin_success():
+    clear_alerts()
+    alert_id = make_alert(station_id="ST001", alert_level="warning")
+    resp = client.post(f"/api/warnings/{alert_id}/handle", headers={"Authorization": f"Bearer {admin_token()}"})
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+    conn = database.get_connection()
+    row = conn.cursor().execute(
+        "SELECT is_handled FROM warning_records WHERE id = ?", (alert_id,)
+    ).fetchone()
+    conn.close()
+    assert row["is_handled"] == 1
+    active = client.get("/api/warnings/active").json()["data"]
+    assert not any(w["id"] == alert_id for w in active)

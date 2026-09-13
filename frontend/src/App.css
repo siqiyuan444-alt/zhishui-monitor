@@ -2296,3 +2296,382 @@ button:disabled {
     gap: 8px;
   }
 }
+
+/* ──────────────────────────── 第19阶段 产品化 ──────────────────────────── */
+
+section[id] {
+  scroll-margin-top: 92px;
+}
+
+.top-nav {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 24px;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.97);
+  border: 1px solid #d8e8ed;
+  border-radius: 12px;
+  box-shadow: 0 2px 10px rgba(17, 78, 96, 0.1);
+}
+
+.top-nav button {
+  margin: 0;
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: 1px solid #d8e8ed;
+  background: #f4fafc;
+  color: #31515c;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.top-nav button:hover {
+  background: #e2eff4;
+  color: #0b5d74;
+}
+
+.top-nav .top-nav-admin {
+  background: #0b5d74;
+  border-color: #0b5d74;
+  color: #ffffff;
+}
+
+.top-nav .top-nav-admin:hover {
+  background: #08475a;
+}
+
+.demo-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-bottom: 24px;
+  padding: 12px 16px;
+  border-radius: 10px;
+  border: 1px solid;
+  font-size: 13px;
+}
+
+.demo-banner .demo-banner-note {
+  width: 100%;
+  color: #7a4a06;
+}
+
+.banner-mock {
+  background: #fff8ec;
+  border-color: #f0cf9a;
+  color: #7a4a06;
+}
+
+.banner-real {
+  background: #eef7fa;
+  border-color: #bfe6d2;
+  color: #176b3f;
+}
+
+.demo-banner-label,
+.demo-banner-quality {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+.banner-mock .demo-banner-label {
+  background: #fff3db;
+  color: #7a4a06;
+}
+
+.banner-mock .demo-banner-quality {
+  background: #fbe9cf;
+  color: #7a4a06;
+}
+
+.banner-real .demo-banner-label {
+  background: #e8f6ef;
+  color: #176b3f;
+}
+
+.banner-real .demo-banner-quality {
+  background: #a9d7f5;
+  color: #123c54;
+}
+
+.overall-status {
+  margin-top: 38px;
+  padding-top: 28px;
+  border-top: 1px solid #d8e8ed;
+}
+
+.overall-status h2 {
+  margin: 0 0 16px;
+  color: #173a46;
+  font-size: 22px;
+}
+
+.overall-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.overall-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #31515c;
+  background: #f4fafc;
+  border: 1px solid #e2eff4;
+}
+
+.pill-normal {
+  color: #126b36;
+  background: #effbf3;
+  border-color: #9ed5ad;
+}
+
+.pill-attention {
+  color: #92400e;
+  background: #fffbeb;
+  border-color: #fbbf24;
+}
+
+.pill-warning {
+  color: #9a3412;
+  background: #fff7ed;
+  border-color: #fb923c;
+}
+
+.pill-danger {
+  color: #991b1b;
+  background: #fef2f2;
+  border-color: #fca5a5;
+}
+
+.pill-alert {
+  color: #1d4ed8;
+  background: #eff6ff;
+  border-color: #93c5fd;
+}
+
+.pill-total {
+  color: #176b3f;
+  background: #e8f6ef;
+  border-color: #bfe6d2;
+}
+
+.login-help {
+  margin: 10px 0 0;
+  color: #8aa3ac;
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.admin-panel {
+  max-width: 960px;
+}
+
+.admin-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+.admin-tab-btn {
+  margin: 0;
+  padding: 9px 20px;
+  border-radius: 8px;
+  border: 1px solid #d5e1ea;
+  background: #f4fafc;
+  color: #4a7480;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.admin-tab-btn.active {
+  background: #0b5d74;
+  color: #ffffff;
+  border-color: #0b5d74;
+}
+
+.admin-tab-btn:hover:not(.active) {
+  background: #e2eff4;
+}
+
+.table-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.quality-table th,
+.quality-table td {
+  white-space: nowrap;
+}
+
+.admin-alerts-tab h2,
+.admin-source-tab h2 {
+  margin: 0 0 16px;
+  color: #173a46;
+  font-size: 18px;
+}
+
+.admin-source-tab h2:not(:first-child) {
+  margin-top: 28px;
+}
+
+.source-status-card {
+  padding: 20px 22px;
+  background: #f4fafc;
+  border: 1px solid #e2eff4;
+  border-radius: 12px;
+  margin-bottom: 24px;
+}
+
+.source-status-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.source-group-label {
+  color: #6a9aa8;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.source-status-head strong {
+  color: #173a46;
+  font-size: 20px;
+}
+
+.config-badge {
+  padding: 3px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.config-yes {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.config-no {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.source-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 14px;
+}
+
+.source-status-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.source-status-grid span {
+  color: #6a9aa8;
+  font-size: 12px;
+}
+
+.source-status-grid strong {
+  color: #173a46;
+  font-size: 16px;
+}
+
+.source-reason {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  background: #fff8ec;
+  border: 1px solid #f0cf9a;
+  border-radius: 8px;
+  color: #7a4a06;
+  font-size: 13px;
+}
+
+.quality-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.quality-stats-grid .stat-card {
+  background: #f4fafc;
+  border: 1px solid #e2eff4;
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+@media (max-width: 720px) {
+  .top-nav {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 8px 10px;
+  }
+}
+
+@media (max-width: 600px) {
+  h1 {
+    font-size: 26px;
+  }
+
+  .header-top {
+    gap: 10px;
+  }
+}
+
+@media (max-width: 480px) {
+  .login-page {
+    padding: 16px;
+  }
+
+  .login-container {
+    padding: 32px 24px;
+  }
+
+  .login-header h1 {
+    font-size: 24px;
+  }
+
+  .warning-summary-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .demo-banner {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .demo-banner .demo-banner-note {
+    width: auto;
+  }
+}

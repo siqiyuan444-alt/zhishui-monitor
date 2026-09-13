@@ -63,6 +63,11 @@ function trendLabel(trend) {
   return labels[trend] || trend || '—'
 }
 
+function scrollToSection(id) {
+  const el = document.getElementById(id)
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
 function formatAxisTime(value, is7d) {
   const d = new Date(value)
   const mm = (d.getMonth() + 1).toString().padStart(2, '0')
@@ -245,7 +250,7 @@ function StationMap({ stations, overviewData, selectedStationId, onStationSelect
   }
 
   return (
-    <section className="map-section" aria-label="水文站地图">
+    <section className="map-section" id="map" aria-label="水文站地图">
       <h2>水文站地图</h2>
       <div className="map-wrapper">
         <MapContainer
@@ -380,6 +385,7 @@ function LoginPage({ onLogin, onRegister, notice }) {
           没有账号？
           <button type="button" className="link-btn" onClick={onRegister}>立即注册</button>
         </p>
+        <p className="login-help">学校师生均可注册普通账号，注册后即可查看成都地区水文监测数据、预警与报表。</p>
       </div>
     </div>
   )
@@ -490,7 +496,8 @@ function RegisterPage({ onBack, onRegistered }) {
   )
 }
 
-function UserManager({ token, onBack }) {
+function AdminPanel({ token, onBack, onLogout, onGoStation }) {
+  const [tab, setTab] = useState('users')
   const [users, setUsers] = useState([])
   const [newUsername, setNewUsername] = useState('')
   const [newPassword, setNewPassword] = useState('')
@@ -498,11 +505,28 @@ function UserManager({ token, onBack }) {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
+  const [alerts, setAlerts] = useState([])
+  const [alertsLoading, setAlertsLoading] = useState(false)
+
+  const [sourceInfo, setSourceInfo] = useState(null)
+  const [qualityStats, setQualityStats] = useState(null)
+  const [stationQuality, setStationQuality] = useState([])
+  const [sourceLoading, setSourceLoading] = useState(false)
+
+  const handleUnauthorized = useCallback((response) => {
+    if (response && response.status === 401) {
+      if (onLogout) onLogout()
+      return true
+    }
+    return false
+  }, [onLogout])
+
   const loadUsers = useCallback(async () => {
     try {
       const response = await fetch(`${API_BASE}/api/users`, {
         headers: { Authorization: `Bearer ${token}` },
       })
+      if (handleUnauthorized(response)) return
       if (response.ok) {
         const result = await response.json()
         setUsers(result.data)
@@ -510,11 +534,78 @@ function UserManager({ token, onBack }) {
     } catch {
       // ignore
     }
-  }, [token])
+  }, [token, handleUnauthorized])
 
   useEffect(() => {
     loadUsers()
   }, [loadUsers])
+
+  const loadAlertsForAdmin = useCallback(async () => {
+    setAlertsLoading(true)
+    try {
+      const [pendingRes, ackRes] = await Promise.allSettled([
+        fetch(`${API_BASE}/api/alerts?hours=720&status=pending&limit=100`).then((r) => r.json()),
+        fetch(`${API_BASE}/api/alerts?hours=720&status=acknowledged&limit=100`).then((r) => r.json()),
+      ])
+      const merged = []
+      if (pendingRes.status === 'fulfilled' && Array.isArray(pendingRes.value.items)) merged.push(...pendingRes.value.items)
+      if (ackRes.status === 'fulfilled' && Array.isArray(ackRes.value.items)) merged.push(...ackRes.value.items)
+      merged.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+      setAlerts(merged)
+    } catch {
+      setAlerts([])
+    } finally {
+      setAlertsLoading(false)
+    }
+  }, [])
+
+  const handleAdminAck = useCallback(async (alertId) => {
+    try {
+      const response = await fetch(`${API_BASE}/api/alerts/${alertId}/acknowledge`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (handleUnauthorized(response)) return
+      if (response.ok) await loadAlertsForAdmin()
+    } catch {
+      // ignore
+    }
+  }, [token, loadAlertsForAdmin, handleUnauthorized])
+
+  const handleAdminResolve = useCallback(async (alertId) => {
+    try {
+      const response = await fetch(`${API_BASE}/api/alerts/${alertId}/resolve`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (handleUnauthorized(response)) return
+      if (response.ok) await loadAlertsForAdmin()
+    } catch {
+      // ignore
+    }
+  }, [token, loadAlertsForAdmin, handleUnauthorized])
+
+  const loadSourceInfo = useCallback(async () => {
+    setSourceLoading(true)
+    try {
+      const [dsRes, dqRes, allRes] = await Promise.allSettled([
+        fetch(`${API_BASE}/api/data-source`).then((r) => r.json()),
+        fetch(`${API_BASE}/api/data-quality`).then((r) => r.json()),
+        fetch(`${API_BASE}/api/water-data-all`).then((r) => r.json()),
+      ])
+      setSourceInfo(dsRes.status === 'fulfilled' ? dsRes.value : null)
+      const dq = dqRes.status === 'fulfilled' ? dqRes.value : null
+      setQualityStats(dq ? dq.data_quality || dq.quality : null)
+      const all = allRes.status === 'fulfilled' && Array.isArray(allRes.value.data) ? allRes.value.data : []
+      setStationQuality(all)
+    } catch {
+      setSourceInfo(null)
+      setQualityStats(null)
+      setStationQuality([])
+    } finally {
+      setSourceLoading(false)
+    }
+  }, [])
 
   const handleCreate = async (e) => {
     e.preventDefault()
@@ -529,6 +620,7 @@ function UserManager({ token, onBack }) {
         },
         body: JSON.stringify({ username: newUsername, password: newPassword, role: newRole }),
       })
+      if (handleUnauthorized(response)) return
       const data = await response.json()
       if (!response.ok) {
         setError(data.detail || '创建失败')
@@ -551,6 +643,7 @@ function UserManager({ token, onBack }) {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       })
+      if (handleUnauthorized(response)) return
       if (response.ok) {
         await loadUsers()
       }
@@ -569,6 +662,7 @@ function UserManager({ token, onBack }) {
         },
         body: JSON.stringify({ role }),
       })
+      if (handleUnauthorized(response)) return
       if (response.ok) {
         await loadUsers()
       }
@@ -579,12 +673,38 @@ function UserManager({ token, onBack }) {
 
   return (
     <div className="user-manager-page">
-      <div className="user-manager-container">
+      <div className="user-manager-container admin-panel">
         <div className="user-manager-header">
-          <h1>用户管理</h1>
+          <h1>管理后台</h1>
           <button className="back-btn" onClick={onBack}>返回监测大屏</button>
         </div>
 
+        <div className="admin-tabs" role="tablist" aria-label="管理功能">
+          <button
+            type="button"
+            className={`admin-tab-btn ${tab === 'users' ? 'active' : ''}`}
+            onClick={() => setTab('users')}
+          >用户管理</button>
+          <button
+            type="button"
+            className={`admin-tab-btn ${tab === 'alerts' ? 'active' : ''}`}
+            onClick={() => {
+              setTab('alerts')
+              loadAlertsForAdmin()
+            }}
+          >告警处理</button>
+          <button
+            type="button"
+            className={`admin-tab-btn ${tab === 'source' ? 'active' : ''}`}
+            onClick={() => {
+              setTab('source')
+              loadSourceInfo()
+            }}
+          >数据源与质量</button>
+        </div>
+
+        {tab === 'users' && (
+          <>
         <form className="create-user-form" onSubmit={handleCreate}>
           <h2>创建新用户</h2>
           <div className="form-row">
@@ -623,6 +743,7 @@ function UserManager({ token, onBack }) {
 
         <div className="user-list-section">
           <h2>用户列表</h2>
+          <div className="table-scroll">
           <table className="user-table">
             <thead>
               <tr>
@@ -662,7 +783,180 @@ function UserManager({ token, onBack }) {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
+          </>
+        )}
+
+        {tab === 'alerts' && (
+          <div className="admin-alerts-tab">
+            <h2>未处理 / 已确认预警（近 30 天）</h2>
+            {alertsLoading && (
+              <p className="notice loading">正在加载预警...</p>
+            )}
+            {!alertsLoading && alerts.length === 0 && (
+              <p className="notice insufficient">当前没有待处理的预警</p>
+            )}
+            {!alertsLoading &&
+              alerts.map((a) => (
+                <article
+                  key={a.id}
+                  className={`alert-card alert-level-${a.warning_level}`}
+                >
+                  <div className="alert-card-top">
+                    <div className="alert-card-left">
+                      <span className={`alert-level alert-level-${a.warning_level}`}>
+                        {ALERT_LEVEL_LABELS[a.warning_level] || a.warning_level}
+                      </span>
+                      <span className="alert-title">
+                        {a.title || `${a.station_name}水情预警`}
+                      </span>
+                      <span className={`alert-status alert-status-${a.status}`}>
+                        {ALERT_STATUS_LABELS[a.status] || a.status}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="alert-card-meta">
+                    <span>站点：{a.station_name}　时间：{new Date(a.created_at).toLocaleString('zh-CN')}</span>
+                    <button
+                      type="button"
+                      className="alert-station-link"
+                      onClick={() => onGoStation && onGoStation(a.station_id)}
+                    >
+                      查看站点
+                    </button>
+                  </div>
+                  <p className="alert-message">{a.message}</p>
+                  <div className="alert-metrics">
+                    <span>当前水位 <strong>{Number(a.water_level).toFixed(2)} m</strong></span>
+                    <span>警戒水位 <strong>{Number(a.warning_level_value).toFixed(2)} m</strong></span>
+                    <span>降雨量 <strong>{Number(a.rainfall).toFixed(1)} mm</strong></span>
+                  </div>
+                  <div className="alert-actions">
+                    {a.status !== 'acknowledged' && (
+                      <button
+                        type="button"
+                        className="alert-btn alert-btn-acknowledge"
+                        onClick={() => handleAdminAck(a.id)}
+                      >
+                        确认预警
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="alert-btn alert-btn-resolve"
+                      onClick={() => handleAdminResolve(a.id)}
+                    >
+                      解除预警
+                    </button>
+                  </div>
+                </article>
+              ))}
+          </div>
+        )}
+
+        {tab === 'source' && (
+          <div className="admin-source-tab">
+            <h2>当前数据源状态</h2>
+            {sourceLoading && (
+              <p className="notice loading">正在加载数据源状态...</p>
+            )}
+            {!sourceLoading && (
+              <>
+                {sourceInfo ? (
+                  <div className="source-status-card">
+                    <div className="source-status-head">
+                      <span className="source-group-label">数据来源</span>
+                      <strong>{sourceInfo.status ? sourceInfo.status.display_name : sourceInfo.display_name || sourceInfo.source || '—'}</strong>
+                      <span className={`config-badge ${sourceInfo.configured ? 'config-yes' : 'config-no'}`}>
+                        {sourceInfo.configured ? '已启用' : '未启用'}
+                      </span>
+                    </div>
+                    <div className="source-status-grid">
+                      <div>
+                        <span>数据质量</span>
+                        <strong>{sourceInfo.data_quality == null ? '—' : qualityText(sourceInfo.data_quality)}</strong>
+                      </div>
+                      <div>
+                        <span>可达性</span>
+                        <strong>{typeof sourceInfo.reachable === 'boolean' ? (sourceInfo.reachable ? '可达' : '不可达') : '—'}</strong>
+                      </div>
+                      <div>
+                        <span>来源标识</span>
+                        <strong>{sourceInfo.source || '—'}</strong>
+                      </div>
+                    </div>
+                    {sourceInfo.status && sourceInfo.status.reason && (
+                      <p className="source-reason">{sourceInfo.status.reason}</p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="notice error">数据源状态获取失败</p>
+                )}
+
+                <h2>数据质量统计</h2>
+                {qualityStats ? (
+                  <div className="quality-stats-grid">
+                    <div className="stat-card">
+                      <span className="stat-label">总记录</span>
+                      <span className="stat-value">{qualityStats.total}</span>
+                    </div>
+                    <div className="stat-card">
+                      <span className="stat-label">良好(valid)</span>
+                      <span className="stat-value">{qualityStats.valid}</span>
+                    </div>
+                    <div className="stat-card">
+                      <span className="stat-label">良好(good)</span>
+                      <span className="stat-value">{qualityStats.good}</span>
+                    </div>
+                    <div className="stat-card">
+                      <span className="stat-label">降级(degraded)</span>
+                      <span className="stat-value">{qualityStats.degraded}</span>
+                    </div>
+                    <div className="stat-card">
+                      <span className="stat-label">无效(invalid)</span>
+                      <span className="stat-value">{qualityStats.invalid}</span>
+                    </div>
+                    <div className="stat-card">
+                      <span className="stat-label">回退(fallback)</span>
+                      <span className="stat-value">{qualityStats.fallback}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="notice error">数据质量统计获取失败</p>
+                )}
+
+                <h2>各站点最新数据来源</h2>
+                {stationQuality.length > 0 ? (
+                  <div className="table-scroll">
+                    <table className="user-table quality-table">
+                      <thead>
+                        <tr>
+                          <th>站点</th>
+                          <th>数据来源</th>
+                          <th>数据质量</th>
+                          <th>更新时间</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {stationQuality.map((s) => (
+                          <tr key={s.station_id}>
+                            <td>{s.station_name}</td>
+                            <td>{sourceText(s.source)}</td>
+                            <td>{qualityText(s.data_quality)}</td>
+                            <td>{formatUpdateTime(s.updated_at)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="notice insufficient">暂无站点数据</p>
+                )}
+              </>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -681,7 +975,7 @@ function MonitorApp({ user, token, onLogout }) {
   const [isLoading, setIsLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState('')
   const [dataErrorMessage, setDataErrorMessage] = useState('')
-  const [showUserManager, setShowUserManager] = useState(false)
+  const [showAdminPanel, setShowAdminPanel] = useState(false)
   const timerRef = useRef(null)
 
   // ── 第14阶段：历史分析状态 ──
@@ -875,13 +1169,15 @@ function MonitorApp({ user, token, onLogout }) {
       }
 
       setWaterData(data)
-      await loadHistoryData(stationId)
-      await loadOverview()
-      await loadRainfallSummary(stationId)
-      await loadWarnings()
-      await loadWarningSummary()
-      await loadLatestWarnings()
-      await loadAlertSummary()
+      await Promise.allSettled([
+        loadHistoryData(stationId),
+        loadOverview(),
+        loadRainfallSummary(stationId),
+        loadWarnings(),
+        loadWarningSummary(),
+        loadLatestWarnings(),
+        loadAlertSummary(),
+      ])
     } catch {
       setErrorMessage('无法连接水情监测服务器')
     } finally {
@@ -976,6 +1272,10 @@ function MonitorApp({ user, token, onLogout }) {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       })
+      if (response.status === 401) {
+        onLogout()
+        return
+      }
       if (response.ok) {
         await loadAlerts()
         await loadAlertSummary()
@@ -983,7 +1283,7 @@ function MonitorApp({ user, token, onLogout }) {
     } catch {
       // ignore
     }
-  }, [token, loadAlerts, loadAlertSummary])
+  }, [token, loadAlerts, loadAlertSummary, onLogout])
 
   const handleAlertResolve = useCallback(async (alertId) => {
     try {
@@ -991,6 +1291,10 @@ function MonitorApp({ user, token, onLogout }) {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       })
+      if (response.status === 401) {
+        onLogout()
+        return
+      }
       if (response.ok) {
         await loadAlerts()
         await loadAlertSummary()
@@ -998,7 +1302,7 @@ function MonitorApp({ user, token, onLogout }) {
     } catch {
       // ignore
     }
-  }, [token, loadAlerts, loadAlertSummary])
+  }, [token, loadAlerts, loadAlertSummary, onLogout])
 
   useEffect(() => {
     loadStations()
@@ -1057,6 +1361,21 @@ function MonitorApp({ user, token, onLogout }) {
   const levelDifference = waterData
     ? Math.abs(waterData.water_level - waterData.warning_level)
     : 0
+
+  const systemSource = (waterData && waterData.source) || (overviewData[0] && overviewData[0].source) || 'mock'
+  const systemQuality = (waterData && waterData.data_quality) || (overviewData[0] && overviewData[0].data_quality) || 'valid'
+  const isMockSource = ['mock', 'mock_fallback', 'invalid_fallback'].includes(systemSource)
+
+  const statusCounts = useMemo(() => {
+    const counts = {}
+    overviewData.forEach((item) => {
+      const s = item.status || '正常'
+      counts[s] = (counts[s] || 0) + 1
+    })
+    return counts
+  }, [overviewData])
+
+  const activeWarnTotal = warningSummary && warningSummary.active != null ? warningSummary.active : latestWarnings.length
 
   const waterChartOption = {
     tooltip: { trigger: 'axis' },
@@ -1129,8 +1448,18 @@ function MonitorApp({ user, token, onLogout }) {
     ],
   }
 
-  if (showUserManager) {
-    return <UserManager token={localStorage.getItem('token')} onBack={() => setShowUserManager(false)} />
+  if (showAdminPanel) {
+    return (
+      <AdminPanel
+        token={token}
+        onBack={() => setShowAdminPanel(false)}
+        onLogout={onLogout}
+        onGoStation={(stationId) => {
+          setSelectedStationId(stationId)
+          setShowAdminPanel(false)
+        }}
+      />
+    )
   }
 
   return (
@@ -1146,13 +1475,30 @@ function MonitorApp({ user, token, onLogout }) {
             <div className="user-info">
               <span className="user-role-badge">{user.role === 'admin' ? '管理员' : '用户'}</span>
               <span className="user-name">{user.username}</span>
-              {user.role === 'admin' && (
-                <button className="admin-btn" onClick={() => setShowUserManager(true)}>用户管理</button>
-              )}
               <button className="logout-btn" onClick={onLogout}>退出</button>
             </div>
           </div>
         </header>
+
+        <nav className="top-nav" aria-label="页面导航">
+          <button type="button" onClick={() => scrollToSection('overview')}>总览</button>
+          <button type="button" onClick={() => scrollToSection('map')}>地图</button>
+          <button type="button" onClick={() => scrollToSection('current')}>实时数据</button>
+          <button type="button" onClick={() => scrollToSection('rainfall')}>雨情</button>
+          <button type="button" onClick={() => scrollToSection('alerts')}>预警</button>
+          <button type="button" onClick={() => scrollToSection('history')}>历史分析</button>
+          <button type="button" onClick={() => scrollToSection('compare')}>站点比较</button>
+          <button type="button" onClick={() => scrollToSection('report')}>数据报表</button>
+          {user.role === 'admin' && (
+            <button type="button" className="top-nav-admin" onClick={() => setShowAdminPanel(true)}>管理后台</button>
+          )}
+        </nav>
+
+        <div className={`demo-banner ${isMockSource ? 'banner-mock' : 'banner-real'}`} aria-label="数据来源说明">
+          <span className="demo-banner-label">数据来源：{sourceText(systemSource)}</span>
+          <span className="demo-banner-quality">数据质量：{qualityText(systemQuality)}</span>
+          {isMockSource && <span className="demo-banner-note">当前为模拟演示数据（非真实官方观测结果），仅供教学与演示使用</span>}
+        </div>
 
         {stations.length > 0 && (
           <div className="station-selector">
@@ -1172,8 +1518,22 @@ function MonitorApp({ user, token, onLogout }) {
         )}
 
         {overviewData.length > 0 && (
+          <section className="overall-status" id="overview" aria-label="整体概览">
+            <h2>整体概览</h2>
+            <div className="overall-pills">
+              <span className="overall-pill pill-total">监测站点 {overviewData.length}</span>
+              <span className="overall-pill pill-normal">正常 {statusCounts['正常'] || 0}</span>
+              <span className="overall-pill pill-attention">注意 {statusCounts['注意'] || 0}</span>
+              <span className="overall-pill pill-warning">警戒 {statusCounts['警戒'] || 0}</span>
+              <span className="overall-pill pill-danger">超警 {statusCounts['超警'] || 0}</span>
+              <span className="overall-pill pill-alert">待处理预警 {activeWarnTotal}</span>
+            </div>
+          </section>
+        )}
+
+        {overviewData.length > 0 && (
           <section className="overview-section" aria-label="水文站总览">
-            <h2>水文站总览</h2>
+            <h2>各站点状态</h2>
             <div className="overview-grid">
               {overviewData.map((item) => {
                 const st = item.status || '正常'
@@ -1230,7 +1590,7 @@ function MonitorApp({ user, token, onLogout }) {
         {waterData && (
           <>
             <p className="station-name">水文站：{waterData.station_name}</p>
-            <section className="data-source-row" aria-label="数据来源与质量">
+            <section className="data-source-row" id="current" aria-label="数据来源与质量">
               <span className={`source-badge source-${String(waterData.source || 'mock').replace(/_/g, '-')}`}>
                 数据来源：{sourceText(waterData.source)}
               </span>
@@ -1368,7 +1728,7 @@ function MonitorApp({ user, token, onLogout }) {
                             </td>
                             <td>{w.is_handled ? '已处理' : '未处理'}</td>
                             <td>
-                              {!w.is_handled && (
+                              {user.role === 'admin' && !w.is_handled && (
                                 <button
                                   className="handle-btn"
                                   onClick={() => handleWarningClick(w.id)}
@@ -1387,7 +1747,7 @@ function MonitorApp({ user, token, onLogout }) {
             </section>
 
             {rainfallSummary && (
-              <section className="rainfall-section" aria-label="雨情监测">
+              <section className="rainfall-section" id="rainfall" aria-label="雨情监测">
                 <h2>雨情监测</h2>
                 <div className="rainfall-grid">
                   <div className="rainfall-stat">
@@ -1428,7 +1788,7 @@ function MonitorApp({ user, token, onLogout }) {
         )}
 
         {/* ── 第14阶段：历史数据分析与趋势预测 ── */}
-        <section className="history-analysis-section" aria-label="历史分析">
+        <section className="history-analysis-section" id="history" aria-label="历史分析">
           <div className="history-header">
             <h2>历史分析</h2>
             <div className="history-range-toggle">
@@ -1633,7 +1993,7 @@ function MonitorApp({ user, token, onLogout }) {
         </section>
 
         {/* ── 第15阶段：多站综合对比 ── */}
-        <section className="comparison-section" aria-label="多站综合对比">
+        <section className="comparison-section" id="compare" aria-label="多站综合对比">
           <div className="history-header">
             <h2>多站综合对比</h2>
             <div className="history-range-toggle">
@@ -1754,7 +2114,7 @@ function MonitorApp({ user, token, onLogout }) {
         </section>
 
         {/* ── 第16阶段：数据报表 ── */}
-        <section className="report-section" aria-label="数据报表">
+        <section className="report-section" id="report" aria-label="数据报表">
           <div className="report-header">
             <h2>数据报表</h2>
             <div className="report-actions">
@@ -1862,8 +2222,8 @@ function MonitorApp({ user, token, onLogout }) {
                         <td>
                           <span className={`status-badge ${getStatusClass(r.status)}`}>{r.status}</span>
                         </td>
-                        <td>{r.source}</td>
-                        <td>{r.data_quality}</td>
+                        <td>{sourceText(r.source)}</td>
+                        <td>{qualityText(r.data_quality)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1876,7 +2236,7 @@ function MonitorApp({ user, token, onLogout }) {
         </section>
 
       {/* ── 第17阶段：智能预警中心 ── */}
-        <section className="alert-center" aria-label="智能预警中心">
+        <section className="alert-center" id="alerts" aria-label="智能预警中心">
           <div className="alert-header">
             <h2>智能预警中心</h2>
             <div className="alert-filters">
@@ -2102,6 +2462,9 @@ function App() {
       }
     }
     checkToken()
+    const handleFocus = () => checkToken()
+    window.addEventListener('focus', handleFocus)
+    return () => window.removeEventListener('focus', handleFocus)
   }, [token])
 
   const handleLogin = (accessToken, userData) => {
