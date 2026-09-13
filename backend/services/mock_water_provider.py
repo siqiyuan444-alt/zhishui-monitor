@@ -9,6 +9,29 @@ from datetime import datetime, timedelta
 
 from .water_data_provider import STATIONS, WATER_RANGES, WaterDataProvider
 
+_WALK_STATE = {}
+_WATER_STEP = 0.08
+_RAIN_STEP = 2.0
+_MAX_RAIN = 80.0
+
+
+def _next_walk_value(sid: str, lo: float, hi: float) -> tuple:
+    """按逐次小幅随机游走生成平滑的模拟水位/降雨。
+
+    每次调用只在上次基础上做小幅漂移并 clamp 到合法区间，
+    避免完全随机导致防控等级在相邻采集之间频繁抖动。
+    """
+    state = _WALK_STATE.get(sid)
+    if state is None:
+        state = {"water_level": random.uniform(lo, hi), "rainfall": generate_rainfall()}
+        _WALK_STATE[sid] = state
+    else:
+        state["water_level"] += random.uniform(-_WATER_STEP, _WATER_STEP)
+        state["rainfall"] += random.uniform(-_RAIN_STEP, _RAIN_STEP)
+    state["water_level"] = max(lo, min(hi, state["water_level"]))
+    state["rainfall"] = max(0.0, min(_MAX_RAIN, state["rainfall"]))
+    return round(state["water_level"], 2), round(state["rainfall"], 1)
+
 
 def calculate_status(water_level: float, warning_level: float, rainfall: float) -> str:
     if water_level >= warning_level * 1.1 or rainfall >= 50:
@@ -60,8 +83,7 @@ def build_mock_record(station: dict, timestamp: str = None) -> dict:
     if not timestamp:
         timestamp = datetime.now().isoformat(timespec="seconds")
 
-    water_level = round(random.uniform(lo, hi), 2)
-    rainfall = generate_rainfall()
+    water_level, rainfall = _next_walk_value(sid, lo, hi)
 
     return {
         "station_id": sid,

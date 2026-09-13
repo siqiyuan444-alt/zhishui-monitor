@@ -409,7 +409,7 @@ def get_all_latest_water_data() -> list:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT w.id, w.station_id, w.station_name, w.water_level, w.warning_level, w.rainfall, w.status, w.created_at
+        SELECT w.id, w.station_id, w.station_name, w.water_level, w.warning_level, w.rainfall, w.status, w.source, w.data_quality, w.created_at
         FROM water_data w
         INNER JOIN (
             SELECT station_id, MAX(id) as max_id FROM water_data GROUP BY station_id

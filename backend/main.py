@@ -1,7 +1,8 @@
 import csv
 import io
 import os
-import random
+import secrets
+import sys
 from datetime import datetime, timedelta
 
 import jwt
@@ -22,8 +23,6 @@ from database import (
     count_warnings_since,
     get_all_latest_water_data,
     get_rainfall_summary,
-    calculate_status,
-    generate_rainfall,
     get_warnings,
     get_active_warnings,
     get_warnings_summary,
@@ -33,7 +32,6 @@ from database import (
     count_all_warnings_since,
     get_report_data,
     get_report_stats,
-    WATER_RANGES,
     get_user_by_username,
     get_user_by_id,
     get_all_users,
@@ -56,6 +54,7 @@ from services.data_analysis import (
 from services.alert_service import create_alert_if_needed
 from services.water_data_provider import get_provider, ProviderError
 from services.real_water_provider import RealWaterProvider
+from services.mock_water_provider import build_mock_record
 from services.data_normalizer import (
     SOURCE_CHENGDU_OPEN_DATA,
     SOURCE_MOCK_FALLBACK,
@@ -63,7 +62,14 @@ from services.data_normalizer import (
     QUALITY_VALID,
 )
 
-JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "dev-secret-key-change-in-production")
+JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "")
+if not JWT_SECRET_KEY:
+    JWT_SECRET_KEY = secrets.token_hex(32)
+    print(
+        "WARNING: 未设置 JWT_SECRET_KEY，已生成随机密钥；重启后已签发令牌将全部失效。"
+        "生产环境请通过环境变量设置稳定的 JWT_SECRET_KEY。",
+        file=sys.stderr,
+    )
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_MINUTES = int(os.environ.get("JWT_EXPIRE_MINUTES", "60"))
 
@@ -280,35 +286,15 @@ def _build_current_record(station: dict) -> dict:
             pass
         except Exception:
             pass
-        lo, hi = WATER_RANGES.get(station["station_id"], (3.0, 6.0))
-        water_level = round(random.uniform(lo, hi), 2)
-        rainfall = generate_rainfall()
-        return {
-            "station_id": station["station_id"],
-            "station_name": station["station_name"],
-            "water_level": water_level,
-            "warning_level": station["warning_level"],
-            "rainfall": rainfall,
-            "status": calculate_status(water_level, station["warning_level"], rainfall),
-            "timestamp": datetime.now().isoformat(timespec="seconds"),
-            "source": SOURCE_MOCK_FALLBACK,
-            "data_quality": QUALITY_DEGRADED,
-        }
+        record = build_mock_record(station)
+        record["source"] = SOURCE_MOCK_FALLBACK
+        record["data_quality"] = QUALITY_DEGRADED
+        return record
 
-    lo, hi = WATER_RANGES.get(station["station_id"], (3.0, 6.0))
-    water_level = round(random.uniform(lo, hi), 2)
-    rainfall = generate_rainfall()
-    return {
-        "station_id": station["station_id"],
-        "station_name": station["station_name"],
-        "water_level": water_level,
-        "warning_level": station["warning_level"],
-        "rainfall": rainfall,
-        "status": calculate_status(water_level, station["warning_level"], rainfall),
-        "timestamp": datetime.now().isoformat(timespec="seconds"),
-        "source": "mock",
-        "data_quality": QUALITY_VALID,
-    }
+    record = build_mock_record(station)
+    record["source"] = "mock"
+    record["data_quality"] = QUALITY_VALID
+    return record
 
 
 @app.get("/api/water-data")
