@@ -16,10 +16,10 @@ const STATUS_CLASSES = {
 }
 
 const STATUS_COLORS = {
-  '正常': '#16803c',
-  '注意': '#d97706',
-  '警戒': '#ea580c',
-  '超警': '#dc2626',
+  '正常': '#35d98f',
+  '注意': '#f5c518',
+  '警戒': '#fb923c',
+  '超警': '#f65b5b',
 }
 
 function getStatusClass(status) {
@@ -27,7 +27,7 @@ function getStatusClass(status) {
 }
 
 function getStatusColor(status) {
-  return STATUS_COLORS[status] || '#16803c'
+  return STATUS_COLORS[status] || '#35d98f'
 }
 
 // ── 第17阶段：智能预警中心辅助常量 ──
@@ -47,25 +47,25 @@ const ALERT_STATUS_LABELS = {
 const ALERT_HOURS_MAP = { '24h': 24, '7d': 168, '30d': 720 }
 
 // ── 第15阶段：多站综合对比辅助函数 ──
-const COMPARE_CHART_COLORS = ['#0b5d74', '#2563eb', '#d97706', '#16a34a', '#9333ea']
+const COMPARE_CHART_COLORS = ['#2dccf0', '#60a5fa', '#f5c518', '#35d98f', '#c084fc']
 
 const CHART_TOOLTIP = {
-  backgroundColor: '#ffffff',
-  borderColor: '#dde7ec',
+  backgroundColor: 'rgba(12, 30, 43, 0.94)',
+  borderColor: '#2c4f63',
   borderWidth: 1,
   padding: [8, 12],
-  textStyle: { color: '#16323f', fontSize: 12 },
-  extraCssText: 'box-shadow: 0 6px 18px rgba(16,48,63,0.12); border-radius: 8px;',
+  textStyle: { color: '#e5f2f8', fontSize: 12 },
+  extraCssText: 'box-shadow: 0 6px 18px rgba(0,0,0,0.4); border-radius: 8px;',
 }
 
 const CHART_AXIS = {
-  axisLine: { lineStyle: { color: '#dde7ec' } },
+  axisLine: { lineStyle: { color: '#2c4f63' } },
   axisTick: { show: false },
-  axisLabel: { color: '#516c7a', fontSize: 11 },
-  splitLine: { lineStyle: { color: '#eef3f6' } },
+  axisLabel: { color: '#9cb6c4', fontSize: 11 },
+  splitLine: { lineStyle: { color: 'rgba(78, 118, 143, 0.28)' } },
 }
 
-const CHART_NAME = { color: '#516c7a', fontSize: 12 }
+const CHART_NAME = { color: '#9cb6c4', fontSize: 12 }
 
 const CHART_LEGEND = {
   top: 0,
@@ -73,7 +73,7 @@ const CHART_LEGEND = {
   itemWidth: 8,
   itemHeight: 8,
   itemGap: 16,
-  textStyle: { color: '#516c7a', fontSize: 12 },
+  textStyle: { color: '#b7cdd9', fontSize: 12 },
 }
 
 function riskLevelLabel(riskLevel) {
@@ -165,8 +165,8 @@ function waterCompareOption(data, range) {
     legend: { ...CHART_LEGEND },
     grid: { left: 52, right: 18, top: 40, bottom: 46 },
     dataZoom: [
-      { type: 'inside', start: 0, end: 100, textStyle: { color: '#516c7a' } },
-      { type: 'slider', start: 0, end: 100, height: 16, bottom: 8, borderColor: '#dde7ec', textStyle: { color: '#516c7a' } },
+      { type: 'inside', start: 0, end: 100, textStyle: { color: '#9cb6c4' } },
+      { type: 'slider', start: 0, end: 100, height: 16, bottom: 8, borderColor: '#2c4f63', textStyle: { color: '#9cb6c4' } },
     ],
     xAxis: {
       type: 'category',
@@ -226,10 +226,10 @@ function rainfallCompareOption(data) {
         data: data.stations.map((s) => ({
           value: s.total_rainfall,
           itemStyle: {
-            color: s.total_rainfall >= 50 ? '#dc2626'
-              : s.total_rainfall >= 30 ? '#ea580c'
-              : s.total_rainfall >= 15 ? '#d97706'
-              : s.total_rainfall >= 5 ? '#2563eb'
+            color: s.total_rainfall >= 50 ? '#f65b5b'
+              : s.total_rainfall >= 30 ? '#fb923c'
+              : s.total_rainfall >= 15 ? '#f5c518'
+              : s.total_rainfall >= 5 ? '#60a5fa'
               : '#94a3b8',
           },
         })),
@@ -1574,17 +1574,17 @@ function MonitorApp({ user, token, onLogout }) {
         data: trendData.map((point, index) => {
           const isLatestOver = index === trendData.length - 1 && point.waterLevel >= point.warningLevel
           return isLatestOver
-            ? { value: point.waterLevel, symbolSize: 13, itemStyle: { color: '#dc2626' } }
+            ? { value: point.waterLevel, symbolSize: 13, itemStyle: { color: '#f65b5b' } }
             : point.waterLevel
         }),
         smooth: true,
         symbolSize: 8,
-        lineStyle: { color: '#0e7490', width: 3 },
-        itemStyle: { color: '#0e7490' },
-        areaStyle: { color: 'rgba(14, 116, 144, 0.08)' },
+        lineStyle: { color: '#2dccf0', width: 3 },
+        itemStyle: { color: '#2dccf0' },
+        areaStyle: { color: 'rgba(45, 204, 240, 0.12)' },
         markLine: {
           symbol: 'none',
-          lineStyle: { color: '#d97706', type: 'dashed' },
+          lineStyle: { color: '#f5c518', type: 'dashed' },
           label: { formatter: '警戒水位' },
           data: trendData.length
             ? [{ yAxis: trendData[trendData.length - 1].warningLevel }]
@@ -1619,10 +1619,10 @@ function MonitorApp({ user, token, onLogout }) {
         data: trendData.map((point) => ({
           value: point.rainfall,
           itemStyle: {
-            color: point.rainfall >= 50 ? '#dc2626'
-              : point.rainfall >= 30 ? '#ea580c'
-              : point.rainfall >= 15 ? '#d97706'
-              : point.rainfall >= 5 ? '#2563eb'
+            color: point.rainfall >= 50 ? '#f65b5b'
+              : point.rainfall >= 30 ? '#fb923c'
+              : point.rainfall >= 15 ? '#f5c518'
+              : point.rainfall >= 5 ? '#60a5fa'
               : '#94a3b8',
           },
         })),
@@ -2229,8 +2229,8 @@ function MonitorApp({ user, token, onLogout }) {
                         tooltip: { ...CHART_TOOLTIP, trigger: 'axis' },
                         grid: { left: 52, right: 18, top: 32, bottom: 46 },
                         dataZoom: [
-                          { type: 'inside', start: 0, end: 100, textStyle: { color: '#516c7a' } },
-                          { type: 'slider', start: 0, end: 100, height: 16, bottom: 8, borderColor: '#dde7ec', textStyle: { color: '#516c7a' } },
+                          { type: 'inside', start: 0, end: 100, textStyle: { color: '#9cb6c4' } },
+                          { type: 'slider', start: 0, end: 100, height: 16, bottom: 8, borderColor: '#2c4f63', textStyle: { color: '#9cb6c4' } },
                         ],
                         xAxis: {
                           type: 'category',
@@ -2262,13 +2262,13 @@ function MonitorApp({ user, token, onLogout }) {
                           data: analysisData.history.data.map(d => d.water_level),
                           smooth: true,
                           symbolSize: 6,
-                          lineStyle: { color: '#0e7490', width: 2 },
-                          itemStyle: { color: '#0e7490' },
-                          areaStyle: { color: 'rgba(14, 116, 144, 0.08)' },
+                          lineStyle: { color: '#2dccf0', width: 2 },
+                          itemStyle: { color: '#2dccf0' },
+                          areaStyle: { color: 'rgba(45, 204, 240, 0.12)' },
                           markLine: analysisData.statistics && analysisData.statistics.sufficient
                             ? {
                                 symbol: 'none',
-                                lineStyle: { color: '#d97706', type: 'dashed' },
+                                lineStyle: { color: '#f5c518', type: 'dashed' },
                                 label: { formatter: '平均水位' },
                                 data: [{ yAxis: analysisData.statistics.avg_water_level }],
                               }
@@ -2285,8 +2285,8 @@ function MonitorApp({ user, token, onLogout }) {
                         tooltip: { ...CHART_TOOLTIP, trigger: 'axis' },
                         grid: { left: 52, right: 18, top: 32, bottom: 46 },
                         dataZoom: [
-                          { type: 'inside', start: 0, end: 100, textStyle: { color: '#516c7a' } },
-                          { type: 'slider', start: 0, end: 100, height: 16, bottom: 8, borderColor: '#dde7ec', textStyle: { color: '#516c7a' } },
+                          { type: 'inside', start: 0, end: 100, textStyle: { color: '#9cb6c4' } },
+                          { type: 'slider', start: 0, end: 100, height: 16, bottom: 8, borderColor: '#2c4f63', textStyle: { color: '#9cb6c4' } },
                         ],
                         xAxis: {
                           type: 'category',
@@ -2318,10 +2318,10 @@ function MonitorApp({ user, token, onLogout }) {
                           data: analysisData.history.data.map(d => ({
                             value: d.rainfall,
                             itemStyle: {
-                              color: d.rainfall >= 50 ? '#dc2626'
-                                : d.rainfall >= 30 ? '#ea580c'
-                                : d.rainfall >= 15 ? '#d97706'
-                                : d.rainfall >= 5 ? '#2563eb'
+                              color: d.rainfall >= 50 ? '#f65b5b'
+                                : d.rainfall >= 30 ? '#fb923c'
+                                : d.rainfall >= 15 ? '#f5c518'
+                                : d.rainfall >= 5 ? '#60a5fa'
                                 : '#94a3b8',
                             },
                           })),

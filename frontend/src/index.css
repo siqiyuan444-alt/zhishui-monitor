@@ -1,42 +1,44 @@
 :root {
   font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
-  color: #16323f;
-  background: #eef3f6;
+  color: #e5f2f8;
+  background: #08141d;
 
-  --c-primary: #0e7490;
-  --c-primary-hover: #155e75;
-  --c-primary-soft: #e3f1f6;
-  --c-primary-soft-strong: #c3dde8;
-  --c-primary-ring: rgba(14, 116, 144, 0.16);
+  --c-primary: #2dccf0;
+  --c-primary-hover: #48d8f3;
+  --c-primary-deep: #0d93ad;
+  --c-primary-deep-hover: #0a7b93;
+  --c-primary-soft: rgba(45, 204, 240, 0.16);
+  --c-primary-soft-strong: rgba(45, 204, 240, 0.3);
+  --c-primary-ring: rgba(45, 204, 240, 0.4);
 
-  --c-text: #16323f;
-  --c-text-2: #516c7a;
-  --c-text-3: #8aa0ab;
+  --c-text: #e5f2f8;
+  --c-text-2: #9cb6c4;
+  --c-text-3: #5f7d8f;
 
-  --c-bg: #eef3f6;
-  --c-card: #ffffff;
-  --c-subtle: #f4f9fb;
+  --c-bg: #08141d;
+  --c-card: #102433;
+  --c-subtle: #0c1d2b;
 
-  --c-border: #dde7ec;
-  --c-border-strong: #c9d8df;
+  --c-border: #1d3a4a;
+  --c-border-strong: #2c4f63;
 
-  --st-normal: #16803c;
-  --st-normal-soft: #e7f6ec;
-  --st-attention: #b45309;
-  --st-attention-soft: #fdf3d8;
-  --st-warning: #c2410c;
-  --st-warning-soft: #fff0e2;
-  --st-danger: #dc2626;
-  --st-danger-soft: #fdecec;
+  --st-normal: #35d98f;
+  --st-normal-soft: rgba(53, 217, 143, 0.15);
+  --st-attention: #f5c518;
+  --st-attention-soft: rgba(245, 197, 24, 0.15);
+  --st-warning: #fb923c;
+  --st-warning-soft: rgba(251, 146, 60, 0.16);
+  --st-danger: #f65b5b;
+  --st-danger-soft: rgba(246, 91, 91, 0.16);
 
   --r-sm: 6px;
   --r-md: 8px;
   --r-lg: 12px;
   --r-xl: 16px;
 
-  --sh-sm: 0 1px 3px rgba(16, 48, 63, 0.06);
-  --sh-md: 0 4px 14px rgba(16, 48, 63, 0.08);
-  --sh-lg: 0 12px 32px rgba(16, 48, 63, 0.1);
+  --sh-sm: 0 2px 8px rgba(0, 0, 0, 0.32);
+  --sh-md: 0 6px 18px rgba(0, 0, 0, 0.4);
+  --sh-lg: 0 16px 40px rgba(0, 0, 0, 0.5);
 }
 
 * {
@@ -45,10 +47,34 @@
 
 html {
   scroll-behavior: smooth;
+  color-scheme: dark;
 }
 
 body {
   margin: 0;
+  color: var(--c-text);
   background: var(--c-bg);
+  background-image:
+    radial-gradient(1100px 520px at 50% -12%, rgba(45, 204, 240, 0.08), transparent 62%),
+    radial-gradient(900px 460px at 100% 100%, rgba(13, 147, 173, 0.06), transparent 60%);
   -webkit-font-smoothing: antialiased;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2c4f63 #0c1d2b;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #2c4f63;
+  border-radius: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: #0c1d2b;
 }
