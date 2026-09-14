@@ -2962,3 +2962,1112 @@ section[id] {
     padding: 16px;
   }
 }
+
+/* ──────────────────────────── 第一轮 UI 视觉统一层 ──────────────────────────── */
+
+/* 页面外壳：扁平化背景，统一面板 */
+.monitor-page,
+.login-page,
+.user-manager-page {
+  background: var(--c-bg);
+}
+
+.monitor-panel,
+.user-manager-container {
+  max-width: 1060px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--sh-lg);
+}
+
+.monitor-page {
+  padding: 40px 24px;
+}
+
+.page-header {
+  padding-bottom: 16px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--c-border);
+}
+
+h1 {
+  color: var(--c-text);
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.system-label {
+  color: var(--c-primary);
+  font-size: 13px;
+  letter-spacing: 2px;
+}
+
+.subtitle {
+  color: var(--c-text-3);
+  font-size: 14px;
+}
+
+.user-role-badge {
+  color: var(--c-primary);
+  background: var(--c-primary-soft);
+}
+
+.user-name {
+  color: var(--c-text-2);
+}
+
+/* ── 顶部导航：单行分段式，当前模块高亮 ── */
+.top-nav {
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 22px;
+  padding: 8px 10px;
+  background: var(--c-card);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-sm);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.top-nav::-webkit-scrollbar {
+  display: none;
+}
+
+.top-nav button {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 8px 15px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--c-text-2);
+  font-size: 14px;
+  font-weight: 600;
+  position: relative;
+}
+
+.top-nav button:hover:not(.active) {
+  background: var(--c-subtle);
+  color: var(--c-primary);
+}
+
+.top-nav button.active {
+  background: var(--c-primary-soft);
+  color: var(--c-primary);
+}
+
+.top-nav button.active::after {
+  content: "";
+  position: absolute;
+  left: 15px;
+  right: 15px;
+  bottom: 4px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--c-primary);
+}
+
+.top-nav .top-nav-admin {
+  background: var(--c-primary);
+  border-color: var(--c-primary);
+  color: #ffffff;
+}
+
+.top-nav .top-nav-admin:hover:not(:disabled) {
+  background: var(--c-primary-hover);
+  color: #ffffff;
+}
+
+/* ── 数据来源条与站点选择 ── */
+.demo-banner {
+  border-radius: var(--r-lg);
+}
+
+.station-selector {
+  background: var(--c-subtle);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+}
+
+.station-selector select {
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--r-md);
+}
+
+.station-selector select:focus {
+  border-color: var(--c-primary);
+  box-shadow: 0 0 0 3px var(--c-primary-ring);
+}
+
+.station-name {
+  color: var(--c-text);
+}
+
+/* ── 各功能模块统一为「数据卡片」 ── */
+.overall-status,
+.overview-section,
+.map-section,
+.trend-section,
+.rainfall-section,
+.warning-center,
+.history-analysis-section,
+.comparison-section,
+.report-section,
+.alert-center,
+.ai-analysis-section {
+  margin-top: 26px;
+  padding: 26px 28px;
+  background: var(--c-card);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--sh-sm);
+}
+
+.overall-status h2,
+.overview-section h2,
+.map-section h2,
+.trend-section h2,
+.rainfall-section h2,
+.warning-center h2,
+.history-analysis-section h2,
+.comparison-section h2,
+.report-section h2,
+.alert-center h2,
+.ai-header h2 {
+  color: var(--c-text);
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.warning-center h3,
+.history-chart-container h3,
+.forecast-card h3,
+.risk-ranking-block h3,
+.create-user-form h2,
+.user-list-section h2,
+.admin-alerts-tab h2,
+.admin-source-tab h2,
+.ai-block h3 {
+  color: var(--c-text);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+/* ── 当前水情数据卡：数字突出、单位清晰、状态分级条 ── */
+.data-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+
+.data-card {
+  position: relative;
+  min-height: 158px;
+  padding: 18px 20px 20px;
+  justify-content: flex-start;
+  gap: 12px;
+  overflow: hidden;
+  background: var(--c-card);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-sm);
+}
+
+.data-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--c-primary);
+  opacity: 0.55;
+}
+
+.data-card.water-level-card {
+  background: var(--c-card);
+}
+
+.data-card.rainfall-card {
+  background: var(--c-card);
+}
+
+.data-card.rainfall-card::before {
+  background: #2563eb;
+}
+
+.data-card.status-card.normal::before {
+  background: var(--st-normal);
+}
+
+.data-card.status-card.attention {
+  background: #fffef3;
+  border-color: #f0deb0;
+}
+
+.data-card.status-card.attention::before {
+  background: var(--st-attention);
+}
+
+.data-card.status-card.warning {
+  background: #fff8ef;
+  border-color: #f0ccb2;
+}
+
+.data-card.status-card.warning::before {
+  background: var(--st-warning);
+}
+
+.data-card.status-card.danger {
+  background: #fff4f4;
+  border-color: #f3bdbd;
+}
+
+.data-card.status-card.danger::before {
+  background: var(--st-danger);
+}
+
+.data-card > span:first-child {
+  color: var(--c-text-3);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+}
+
+.data-card strong {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--c-text);
+  font-size: 30px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.data-card small {
+  color: var(--c-text-3);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.water-level-card strong {
+  color: var(--c-primary);
+}
+
+.rainfall-card strong {
+  color: #2563eb;
+}
+
+.status-card.normal strong {
+  color: var(--st-normal);
+}
+
+.data-card .data-card-sub {
+  color: var(--c-text-2);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+/* ── 地图：标题 + 图例 + 站点统计 ── */
+.map-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.map-title-block h2 {
+  margin: 0;
+}
+
+.map-sub {
+  margin: 4px 0 0;
+  color: var(--c-text-3);
+  font-size: 13px;
+}
+
+.map-stats {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.map-count {
+  color: var(--c-text-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.map-legend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 6px 12px;
+  background: var(--c-subtle);
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+}
+
+.map-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-text-2);
+  white-space: nowrap;
+}
+
+.map-legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 0 1px rgba(16, 48, 63, 0.15);
+}
+
+.map-legend-dot.dot-normal {
+  background: #16803c;
+}
+
+.map-legend-dot.dot-attention {
+  background: #d97706;
+}
+
+.map-legend-dot.dot-warning {
+  background: #ea580c;
+}
+
+.map-legend-dot.dot-danger {
+  background: #dc2626;
+}
+
+.map-wrapper {
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-sm);
+}
+
+.station-map {
+  height: 460px;
+}
+
+/* ── 综合预警条与概览卡片 ── */
+.warning-panel {
+  border-radius: var(--r-lg);
+}
+
+.warning-panel h2 {
+  color: var(--c-text);
+  font-size: 20px;
+}
+
+.warning-status,
+.status-badge,
+.warning-type-badge {
+  font-weight: 600;
+}
+
+.latest-warning-item {
+  border-left: 3px solid var(--c-border-strong);
+}
+
+.latest-warning-item.warning-type-attention {
+  border-left-color: #d97706;
+}
+
+.latest-warning-item.warning-type-warning {
+  border-left-color: #ea580c;
+}
+
+.latest-warning-item.warning-type-critical {
+  border-left-color: #dc2626;
+}
+
+.latest-warning-station {
+  color: var(--c-text);
+}
+
+.overview-card {
+  background: var(--c-card);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+}
+
+.overview-card:hover {
+  box-shadow: var(--sh-md);
+}
+
+.overview-attention {
+  background: #fffef3;
+  border-color: #f0deb0;
+}
+
+.overview-warning {
+  background: #fff8ef;
+  border-color: #f0ccb2;
+}
+
+.overview-danger {
+  background: #fff4f4;
+  border-color: #f3bdbd;
+}
+
+.overview-level {
+  color: var(--c-text);
+}
+
+.overview-card h3 {
+  color: var(--c-text);
+}
+
+/* ── 整站概览状态胶囊 ── */
+.overall-pill {
+  color: var(--c-text-2);
+  background: var(--c-subtle);
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+}
+
+/* ── 统计卡（历史/报表/预警共用） ── */
+.history-stats-grid .stat-card,
+.report-stats-grid .stat-card,
+.alert-stats-grid .stat-card,
+.quality-stats-grid .stat-card {
+  background: var(--c-subtle);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+}
+
+.history-stats-grid .stat-card .stat-label,
+.report-stats-grid .stat-card .stat-label,
+.alert-stats-grid .stat-card .stat-label,
+.quality-stats-grid .stat-card .stat-label {
+  color: var(--c-text-3);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  text-transform: none;
+}
+
+.history-stats-grid .stat-card .stat-value,
+.report-stats-grid .stat-card .stat-value,
+.alert-stats-grid .stat-card .stat-value,
+.quality-stats-grid .stat-card .stat-value {
+  color: var(--c-text);
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.highlight-card {
+  background: var(--c-subtle);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+}
+
+.highlight-card:hover {
+  border-color: var(--c-primary);
+  box-shadow: var(--sh-md);
+}
+
+.highlight-label {
+  color: var(--c-text-3);
+}
+
+.highlight-card small {
+  color: var(--c-text-3);
+}
+
+/* ── 图表容器统一 ── */
+.history-chart-container,
+.chart-frame {
+  background: var(--c-subtle);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  padding: 18px 20px;
+}
+
+.history-chart-container h3 {
+  margin: 0 0 12px;
+}
+
+/* ── 表格统一 ── */
+.warning-table th,
+.user-table th,
+.risk-table th,
+.report-table th,
+.quality-table th {
+  color: var(--c-text-2);
+  font-weight: 600;
+  font-size: 12.5px;
+  letter-spacing: 0.3px;
+  background: var(--c-subtle);
+  border-bottom: 1px solid var(--c-border);
+  text-transform: none;
+}
+
+.warning-table td,
+.user-table td,
+.risk-table td,
+.report-table td {
+  color: var(--c-text);
+  border-bottom: 1px solid #edf2f5;
+}
+
+.warning-table tr:hover td,
+.user-table tr:hover td,
+.risk-table tbody tr:hover {
+  background: var(--c-subtle);
+}
+
+.report-table-wrapper {
+  background: var(--c-card);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-sm);
+}
+
+.risk-ranking-block {
+  background: var(--c-card);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-sm);
+}
+
+.risk-ranking-block h3 {
+  border-bottom: 1px solid var(--c-border);
+}
+
+.risk-table tbody tr.active-row {
+  background: var(--c-primary-soft);
+}
+
+/* ── 按钮统一 ── */
+.top-nav button,
+.history-range-toggle button,
+.report-range-toggle button,
+.alert-range-toggle button,
+.admin-tab-btn,
+.highlight-card,
+.create-btn,
+.back-btn,
+.logout-btn,
+.login-btn,
+.link-btn,
+.alert-btn,
+.alert-station-link,
+.handle-btn,
+.delete-btn,
+.report-export-btn {
+  margin: 0;
+}
+
+.history-range-toggle button,
+.report-range-toggle button,
+.alert-range-toggle button {
+  padding: 7px 16px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--c-border);
+  background: var(--c-card);
+  color: var(--c-text-2);
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.history-range-toggle button:hover:not(.active),
+.report-range-toggle button:hover:not(.active),
+.alert-range-toggle button:hover:not(.active) {
+  background: var(--c-primary-soft);
+  color: var(--c-primary);
+  border-color: var(--c-primary-soft-strong);
+}
+
+.history-range-toggle button.active,
+.report-range-toggle button.active,
+.alert-range-toggle button.active {
+  background: var(--c-primary);
+  border-color: var(--c-primary);
+  color: #ffffff;
+}
+
+.admin-tab-btn {
+  padding: 9px 20px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--c-border);
+  background: var(--c-card);
+  color: var(--c-text-2);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.admin-tab-btn.active {
+  background: var(--c-primary);
+  border-color: var(--c-primary);
+  color: #ffffff;
+}
+
+.admin-tab-btn:hover:not(.active) {
+  background: var(--c-primary-soft);
+  border-color: var(--c-primary-soft-strong);
+}
+
+.create-btn,
+.report-export-btn,
+.ai-run-btn {
+  background: var(--c-primary);
+  border: 1px solid var(--c-primary);
+  border-radius: var(--r-md);
+  color: #ffffff;
+}
+
+.create-btn:hover,
+.report-export-btn:hover,
+.ai-run-btn:hover:not(:disabled) {
+  background: var(--c-primary-hover);
+  border-color: var(--c-primary-hover);
+}
+
+.admin-btn,
+.back-btn,
+.handle-btn {
+  background: var(--c-card);
+  border: 1px solid var(--c-primary);
+  border-radius: var(--r-md);
+  color: var(--c-primary);
+  font-weight: 600;
+}
+
+.admin-btn:hover,
+.back-btn:hover,
+.handle-btn:hover {
+  background: var(--c-primary);
+  color: #ffffff;
+}
+
+.handle-btn {
+  font-size: 13px;
+}
+
+.delete-btn,
+.logout-btn {
+  background: var(--c-card);
+  border: 1px solid var(--st-danger);
+  border-radius: var(--r-md);
+  color: var(--st-danger);
+  font-weight: 600;
+}
+
+.delete-btn:hover,
+.logout-btn:hover {
+  background: var(--st-danger);
+  color: #ffffff;
+}
+
+.alert-station-link {
+  background: transparent;
+  border: 1px solid var(--c-primary);
+  border-radius: var(--r-md);
+  color: var(--c-primary);
+}
+
+.alert-station-link:hover {
+  background: var(--c-primary-soft);
+  border-color: var(--c-primary);
+}
+
+.alert-btn-acknowledge {
+  background: var(--c-primary);
+  border-color: var(--c-primary);
+  color: #ffffff;
+}
+
+.alert-btn-acknowledge:hover {
+  background: var(--c-primary-hover);
+}
+
+.alert-btn-resolve {
+  background: var(--c-card);
+  border: 1px solid var(--st-normal);
+  color: var(--st-normal);
+}
+
+.alert-btn-resolve:hover {
+  background: var(--st-normal-soft);
+}
+
+/* ── 选择框统一 ── */
+.station-selector select,
+.form-field input,
+.form-field select,
+.login-field input,
+.alert-filter-station,
+.alert-filter-level,
+.alert-filter-status,
+.report-station-select,
+.role-select {
+  border-color: var(--c-border-strong);
+  border-radius: var(--r-md);
+}
+
+.station-selector select:focus,
+.form-field input:focus,
+.form-field select:focus,
+.login-field input:focus,
+.alert-filter-station:focus,
+.alert-filter-level:focus,
+.alert-filter-status:focus,
+.report-station-select:focus,
+.role-select:focus {
+  border-color: var(--c-primary);
+  box-shadow: 0 0 0 3px var(--c-primary-ring);
+  outline: none;
+}
+
+/* ── 状态标签 / 告警等级 → 统一柔和胶囊 ── */
+.status-badge,
+.warning-type-badge,
+.latest-warning-type {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.status-normal {
+  color: var(--st-normal);
+  background: var(--st-normal-soft);
+}
+
+.status-attention {
+  color: var(--st-attention);
+  background: var(--st-attention-soft);
+}
+
+.status-warning {
+  color: var(--st-warning);
+  background: var(--st-warning-soft);
+}
+
+.status-danger {
+  color: var(--st-danger);
+  background: var(--st-danger-soft);
+}
+
+.alert-level {
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid;
+}
+
+.alert-level-normal {
+  background: var(--st-normal-soft);
+  border-color: #bde2ca;
+  color: var(--st-normal);
+}
+
+.alert-level-attention {
+  background: var(--st-attention-soft);
+  border-color: #efdfa6;
+  color: var(--st-attention);
+}
+
+.alert-level-warning {
+  background: var(--st-warning-soft);
+  border-color: #f2cdae;
+  color: var(--st-warning);
+}
+
+.alert-level-danger {
+  background: var(--st-danger-soft);
+  border-color: #f4bebd;
+  color: var(--st-danger);
+}
+
+.alert-status-pending {
+  background: var(--st-attention-soft);
+  color: #92600a;
+}
+
+.alert-status-acknowledged {
+  background: #e3eefd;
+  color: #1d4ed8;
+}
+
+.alert-status-resolved {
+  background: var(--st-normal-soft);
+  color: var(--st-normal);
+}
+
+.alert-card {
+  background: var(--c-card);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-sm);
+}
+
+.alert-card:hover {
+  box-shadow: var(--sh-md);
+}
+
+.alert-title {
+  color: var(--c-text);
+}
+
+.alert-message {
+  color: var(--c-text-2);
+}
+
+.alert-metrics strong,
+.alert-card-meta {
+  color: var(--c-text-2);
+}
+
+/* ── 历史分析内部卡片 ── */
+.trend-analysis-card {
+  background: var(--c-subtle);
+  border-left: 4px solid var(--c-primary);
+  border-radius: var(--r-lg);
+}
+
+.forecast-card {
+  background: var(--c-card);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--sh-sm);
+}
+
+.forecast-item .stat-label {
+  color: var(--c-text-3);
+  text-transform: none;
+}
+
+.forecast-item .stat-value {
+  color: var(--c-text);
+}
+
+.trend-badge,
+.risk-badge {
+  border-radius: 999px;
+}
+
+.trend-badge-stable {
+  background: var(--c-primary);
+}
+
+/* ── AI 智能分析 ── */
+.ai-analysis-section {
+  background: var(--c-card);
+  border: 1px solid var(--c-border);
+  box-shadow: var(--sh-sm);
+}
+
+.ai-source-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid;
+}
+
+.ai-source-tag.is-ai {
+  background: var(--st-normal-soft);
+  border-color: #bde2ca;
+  color: var(--st-normal);
+}
+
+.ai-source-tag.is-rule {
+  background: var(--st-attention-soft);
+  border-color: #ead9a6;
+  color: #7a5c16;
+}
+
+.ai-block {
+  background: var(--c-subtle);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+}
+
+.ai-risk-pill {
+  border-radius: var(--r-lg);
+}
+
+.ai-hint {
+  color: var(--c-text-3);
+}
+
+/* ── 综合预警中心内部 ── */
+.summary-card {
+  background: var(--c-subtle);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+}
+
+.summary-value {
+  color: var(--c-text);
+}
+
+/* ── 登录 / 注册 ── */
+.login-page {
+  background: var(--c-bg);
+}
+
+.login-container {
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--sh-lg);
+  border-top: 4px solid var(--c-primary);
+}
+
+.login-header h1 {
+  color: var(--c-text);
+  font-size: 26px;
+}
+
+.login-system-label {
+  display: inline-block;
+  padding: 4px 14px;
+  border-radius: 999px;
+  color: var(--c-primary);
+  background: var(--c-primary-soft);
+  letter-spacing: 1px;
+}
+
+.login-subtitle {
+  color: var(--c-text-3);
+}
+
+.login-field label {
+  color: var(--c-text-2);
+}
+
+.login-field input {
+  background: var(--c-card);
+}
+
+.login-btn {
+  background: var(--c-primary);
+  border-radius: var(--r-md);
+}
+
+.login-btn:hover:not(:disabled) {
+  background: var(--c-primary-hover);
+}
+
+.login-notice {
+  color: var(--st-normal);
+  background: var(--st-normal-soft);
+}
+
+.link-btn {
+  color: var(--c-primary);
+}
+
+.link-btn:hover {
+  color: var(--c-primary-hover);
+}
+
+.login-help {
+  color: var(--c-text-3);
+}
+
+/* ── 管理后台 ── */
+.admin-panel {
+  max-width: 1060px;
+}
+
+.create-user-form,
+.source-status-card {
+  background: var(--c-subtle);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+}
+
+.source-status-head strong {
+  color: var(--c-text);
+}
+
+.source-status-grid span {
+  color: var(--c-text-3);
+}
+
+.source-status-grid strong {
+  color: var(--c-text);
+}
+
+.source-status-head .source-group-label {
+  color: var(--c-text-3);
+}
+
+/* ── 通知块 ── */
+.notice {
+  border-radius: var(--r-md);
+}
+
+.loading {
+  color: var(--c-primary);
+  background: var(--c-primary-soft);
+}
+
+.error {
+  color: #9d2020;
+  background: var(--st-danger-soft);
+}
+
+.data-error {
+  color: #7a4a06;
+  background: var(--st-attention-soft);
+}
+
+/* ── 中屏适配（平板 / 小笔记本） ── */
+@media (max-width: 980px) {
+  .data-cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .monitor-page,
+  .user-manager-page {
+    padding: 24px 16px;
+  }
+}
+
+@media (max-width: 720px) {
+  .data-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .map-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .station-map {
+    height: 350px;
+  }
+
+  .overall-status,
+  .overview-section,
+  .map-section,
+  .trend-section,
+  .rainfall-section,
+  .warning-center,
+  .history-analysis-section,
+  .comparison-section,
+  .report-section,
+  .alert-center,
+  .ai-analysis-section {
+    padding: 20px 16px;
+  }
+}

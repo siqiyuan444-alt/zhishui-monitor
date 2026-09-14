@@ -1,13 +1,54 @@
 :root {
-  font-family: "Microsoft YaHei", system-ui, sans-serif;
-  color: #1f2933;
-  background: #f4f8fa;
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  color: #16323f;
+  background: #eef3f6;
+
+  --c-primary: #0e7490;
+  --c-primary-hover: #155e75;
+  --c-primary-soft: #e3f1f6;
+  --c-primary-soft-strong: #c3dde8;
+  --c-primary-ring: rgba(14, 116, 144, 0.16);
+
+  --c-text: #16323f;
+  --c-text-2: #516c7a;
+  --c-text-3: #8aa0ab;
+
+  --c-bg: #eef3f6;
+  --c-card: #ffffff;
+  --c-subtle: #f4f9fb;
+
+  --c-border: #dde7ec;
+  --c-border-strong: #c9d8df;
+
+  --st-normal: #16803c;
+  --st-normal-soft: #e7f6ec;
+  --st-attention: #b45309;
+  --st-attention-soft: #fdf3d8;
+  --st-warning: #c2410c;
+  --st-warning-soft: #fff0e2;
+  --st-danger: #dc2626;
+  --st-danger-soft: #fdecec;
+
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+
+  --sh-sm: 0 1px 3px rgba(16, 48, 63, 0.06);
+  --sh-md: 0 4px 14px rgba(16, 48, 63, 0.08);
+  --sh-lg: 0 12px 32px rgba(16, 48, 63, 0.1);
 }
 
 * {
   box-sizing: border-box;
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 body {
   margin: 0;
+  background: var(--c-bg);
+  -webkit-font-smoothing: antialiased;
 }

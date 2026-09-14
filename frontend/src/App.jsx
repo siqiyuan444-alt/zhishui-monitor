@@ -49,6 +49,33 @@ const ALERT_HOURS_MAP = { '24h': 24, '7d': 168, '30d': 720 }
 // ── 第15阶段：多站综合对比辅助函数 ──
 const COMPARE_CHART_COLORS = ['#0b5d74', '#2563eb', '#d97706', '#16a34a', '#9333ea']
 
+const CHART_TOOLTIP = {
+  backgroundColor: '#ffffff',
+  borderColor: '#dde7ec',
+  borderWidth: 1,
+  padding: [8, 12],
+  textStyle: { color: '#16323f', fontSize: 12 },
+  extraCssText: 'box-shadow: 0 6px 18px rgba(16,48,63,0.12); border-radius: 8px;',
+}
+
+const CHART_AXIS = {
+  axisLine: { lineStyle: { color: '#dde7ec' } },
+  axisTick: { show: false },
+  axisLabel: { color: '#516c7a', fontSize: 11 },
+  splitLine: { lineStyle: { color: '#eef3f6' } },
+}
+
+const CHART_NAME = { color: '#516c7a', fontSize: 12 }
+
+const CHART_LEGEND = {
+  top: 0,
+  icon: 'circle',
+  itemWidth: 8,
+  itemHeight: 8,
+  itemGap: 16,
+  textStyle: { color: '#516c7a', fontSize: 12 },
+}
+
 function riskLevelLabel(riskLevel) {
   const labels = {
     danger: '红色预警',
@@ -134,17 +161,28 @@ function aiRiskClass(level) {
 function waterCompareOption(data, range) {
   const is7d = range === '168h'
   return {
-    tooltip: { trigger: 'axis' },
-    legend: { top: 0 },
-    grid: { left: 55, right: 20, top: 40, bottom: 50 },
-    dataZoom: [{ type: 'inside', start: 0, end: 100 }],
+    tooltip: { ...CHART_TOOLTIP, trigger: 'axis' },
+    legend: { ...CHART_LEGEND },
+    grid: { left: 52, right: 18, top: 40, bottom: 46 },
+    dataZoom: [
+      { type: 'inside', start: 0, end: 100, textStyle: { color: '#516c7a' } },
+      { type: 'slider', start: 0, end: 100, height: 16, bottom: 8, borderColor: '#dde7ec', textStyle: { color: '#516c7a' } },
+    ],
     xAxis: {
       type: 'category',
       name: '时间',
-      axisLabel: { rotate: is7d ? 35 : 0, formatter: (val) => formatAxisTime(val, is7d) },
+      nameTextStyle: { ...CHART_NAME },
+      ...CHART_AXIS,
+      axisLabel: { ...CHART_AXIS.axisLabel, rotate: is7d ? 35 : 0, formatter: (val) => formatAxisTime(val, is7d) },
       data: data.series.timestamps,
     },
-    yAxis: { type: 'value', name: '水位（m）', axisLabel: { formatter: '{value} m' } },
+    yAxis: {
+      type: 'value',
+      name: '水位（m）',
+      nameTextStyle: { ...CHART_NAME },
+      ...CHART_AXIS,
+      axisLabel: { ...CHART_AXIS.axisLabel, formatter: '{value} m' },
+    },
     series: data.stations.map((s, index) => {
       const color = COMPARE_CHART_COLORS[index % COMPARE_CHART_COLORS.length]
       return {
@@ -162,11 +200,24 @@ function waterCompareOption(data, range) {
 
 function rainfallCompareOption(data) {
   return {
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-    legend: { top: 0, data: ['累计降雨'] },
-    grid: { left: 55, right: 20, top: 40, bottom: 50 },
-    xAxis: { type: 'category', name: '站点', data: data.stations.map((s) => s.station_name) },
-    yAxis: { type: 'value', name: '降雨量（mm）', axisLabel: { formatter: '{value} mm' } },
+    tooltip: { ...CHART_TOOLTIP, trigger: 'axis', axisPointer: { type: 'shadow' } },
+    legend: { ...CHART_LEGEND, data: ['累计降雨'] },
+    grid: { left: 52, right: 18, top: 40, bottom: 46 },
+    xAxis: {
+      type: 'category',
+      name: '站点',
+      nameTextStyle: { ...CHART_NAME },
+      ...CHART_AXIS,
+      axisLabel: { ...CHART_AXIS.axisLabel },
+      data: data.stations.map((s) => s.station_name),
+    },
+    yAxis: {
+      type: 'value',
+      name: '降雨量（mm）',
+      nameTextStyle: { ...CHART_NAME },
+      ...CHART_AXIS,
+      axisLabel: { ...CHART_AXIS.axisLabel, formatter: '{value} mm' },
+    },
     series: [
       {
         name: '累计降雨',
@@ -236,6 +287,15 @@ function StationMap({ stations, overviewData, selectedStationId, onStationSelect
     return map
   }, [latestWarnings])
 
+  const statusCountMap = useMemo(() => {
+    const map = { '正常': 0, '注意': 0, '警戒': 0, '超警': 0 }
+    overviewData.forEach((item) => {
+      const s = item.status || '正常'
+      map[s] = (map[s] || 0) + 1
+    })
+    return map
+  }, [overviewData])
+
   const selectedStation = useMemo(
     () => stations.find((s) => s.station_id === selectedStationId),
     [stations, selectedStationId]
@@ -268,7 +328,23 @@ function StationMap({ stations, overviewData, selectedStationId, onStationSelect
 
   return (
     <section className="map-section" id="map" aria-label="水文站地图">
-      <h2>水文站地图</h2>
+      <div className="map-header">
+        <div className="map-title-block">
+          <h2>水文站地图</h2>
+          <p className="map-sub">成都地区水文监测站点分布与实时状态</p>
+        </div>
+        <div className="map-stats">
+          <span className="map-count">共 {stations.length} 个监测站点</span>
+          <div className="map-legend" aria-hidden="true">
+            {['正常', '注意', '警戒', '超警'].map((s) => (
+              <span key={s} className="map-legend-item">
+                <i className={`map-legend-dot dot-${STATUS_CLASSES[s].replace('status-', '')}`} />
+                {s} {statusCountMap[s] || 0}
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
       <div className="map-wrapper">
         <MapContainer
           center={mapBounds ? mapBounds.center : center}
@@ -1004,6 +1080,31 @@ function MonitorApp({ user, token, onLogout }) {
   const mountedRef = useRef(true)
   const waterPollGuard = useRef(createPollGuard()).current
 
+  const [activeSection, setActiveSection] = useState('overview')
+
+  useEffect(() => {
+    const ids = ['overview', 'ai', 'map', 'current', 'rainfall', 'alerts', 'history', 'compare', 'report']
+    const onScroll = () => {
+      const pos = window.scrollY + Math.min(window.innerHeight, 640) * 0.3
+      let current = ''
+      for (const id of ids) {
+        const el = document.getElementById(id)
+        if (el) {
+          const top = el.getBoundingClientRect().top + window.scrollY
+          if (top <= pos) current = id
+        }
+      }
+      setActiveSection(current || 'overview')
+    }
+    onScroll()
+    window.addEventListener('scroll', onScroll, { passive: true })
+    window.addEventListener('resize', onScroll)
+    return () => {
+      window.removeEventListener('scroll', onScroll)
+      window.removeEventListener('resize', onScroll)
+    }
+  }, [waterData, overviewData, stations])
+
   useEffect(() => {
     mountedRef.current = true
     return () => {
@@ -1449,17 +1550,22 @@ function MonitorApp({ user, token, onLogout }) {
   const activeWarnTotal = warningSummary && warningSummary.active != null ? warningSummary.active : latestWarnings.length
 
   const waterChartOption = {
-    tooltip: { trigger: 'axis' },
-    grid: { left: 55, right: 30, top: 45, bottom: 45 },
+    tooltip: { ...CHART_TOOLTIP, trigger: 'axis' },
+    grid: { left: 52, right: 18, top: 32, bottom: 42 },
     xAxis: {
       type: 'category',
       name: '时间',
+      nameTextStyle: { ...CHART_NAME },
+      ...CHART_AXIS,
+      axisLabel: { ...CHART_AXIS.axisLabel },
       data: trendData.map((point) => point.time),
     },
     yAxis: {
       type: 'value',
       name: '水位（m）',
-      axisLabel: { formatter: '{value} m' },
+      nameTextStyle: { ...CHART_NAME },
+      ...CHART_AXIS,
+      axisLabel: { ...CHART_AXIS.axisLabel, formatter: '{value} m' },
     },
     series: [
       {
@@ -1473,8 +1579,9 @@ function MonitorApp({ user, token, onLogout }) {
         }),
         smooth: true,
         symbolSize: 8,
-        lineStyle: { color: '#0b5d74', width: 3 },
-        itemStyle: { color: '#0b5d74' },
+        lineStyle: { color: '#0e7490', width: 3 },
+        itemStyle: { color: '#0e7490' },
+        areaStyle: { color: 'rgba(14, 116, 144, 0.08)' },
         markLine: {
           symbol: 'none',
           lineStyle: { color: '#d97706', type: 'dashed' },
@@ -1488,17 +1595,22 @@ function MonitorApp({ user, token, onLogout }) {
   }
 
   const rainfallChartOption = {
-    tooltip: { trigger: 'axis' },
-    grid: { left: 55, right: 30, top: 45, bottom: 45 },
+    tooltip: { ...CHART_TOOLTIP, trigger: 'axis' },
+    grid: { left: 52, right: 18, top: 32, bottom: 42 },
     xAxis: {
       type: 'category',
       name: '时间',
+      nameTextStyle: { ...CHART_NAME },
+      ...CHART_AXIS,
+      axisLabel: { ...CHART_AXIS.axisLabel },
       data: trendData.map((point) => point.time),
     },
     yAxis: {
       type: 'value',
       name: '降雨量（mm）',
-      axisLabel: { formatter: '{value} mm' },
+      nameTextStyle: { ...CHART_NAME },
+      ...CHART_AXIS,
+      axisLabel: { ...CHART_AXIS.axisLabel, formatter: '{value} mm' },
     },
     series: [
       {
@@ -1552,15 +1664,15 @@ function MonitorApp({ user, token, onLogout }) {
         </header>
 
         <nav className="top-nav" aria-label="页面导航">
-          <button type="button" onClick={() => scrollToSection('overview')}>总览</button>
-          <button type="button" onClick={() => scrollToSection('ai')}>AI 分析</button>
-          <button type="button" onClick={() => scrollToSection('map')}>地图</button>
-          <button type="button" onClick={() => scrollToSection('current')}>实时数据</button>
-          <button type="button" onClick={() => scrollToSection('rainfall')}>雨情</button>
-          <button type="button" onClick={() => scrollToSection('alerts')}>预警</button>
-          <button type="button" onClick={() => scrollToSection('history')}>历史分析</button>
-          <button type="button" onClick={() => scrollToSection('compare')}>站点比较</button>
-          <button type="button" onClick={() => scrollToSection('report')}>数据报表</button>
+          <button type="button" className={activeSection === 'overview' ? 'active' : ''} onClick={() => scrollToSection('overview')}>总览</button>
+          <button type="button" className={activeSection === 'ai' ? 'active' : ''} onClick={() => scrollToSection('ai')}>AI 分析</button>
+          <button type="button" className={activeSection === 'map' ? 'active' : ''} onClick={() => scrollToSection('map')}>地图</button>
+          <button type="button" className={activeSection === 'current' ? 'active' : ''} onClick={() => scrollToSection('current')}>实时数据</button>
+          <button type="button" className={activeSection === 'rainfall' ? 'active' : ''} onClick={() => scrollToSection('rainfall')}>雨情</button>
+          <button type="button" className={activeSection === 'alerts' ? 'active' : ''} onClick={() => scrollToSection('alerts')}>预警</button>
+          <button type="button" className={activeSection === 'history' ? 'active' : ''} onClick={() => scrollToSection('history')}>历史分析</button>
+          <button type="button" className={activeSection === 'compare' ? 'active' : ''} onClick={() => scrollToSection('compare')}>站点比较</button>
+          <button type="button" className={activeSection === 'report' ? 'active' : ''} onClick={() => scrollToSection('report')}>数据报表</button>
           {user.role === 'admin' && (
             <button type="button" className="top-nav-admin" onClick={() => setShowAdminPanel(true)}>管理后台</button>
           )}
@@ -1638,7 +1750,7 @@ function MonitorApp({ user, token, onLogout }) {
         <section className="ai-analysis-section" id="ai" aria-label="AI 智能水情分析">
           <div className="ai-header">
             <h2>AI 智能水情分析</h2>
-            <span className="ai-source-tag">
+            <span className={`ai-source-tag ${aiAnalysis && aiAnalysis.analysis_source === 'ai_model' ? 'is-ai' : 'is-rule'}`}>
               分析来源：
               {aiAnalysis
                 ? aiAnalysis.analysis_source === 'ai_model'
@@ -1796,18 +1908,32 @@ function MonitorApp({ user, token, onLogout }) {
               <article className="data-card water-level-card">
                 <span>当前水位</span>
                 <strong>{waterData.water_level.toFixed(2)} <small>m</small></strong>
+                <span className="data-card-sub">
+                  {status === '超警' ? '已超警戒水位'
+                    : status === '警戒' ? '已达警戒水位'
+                    : status === '注意' ? '接近警戒水位'
+                    : `低于警戒水位 ${levelDifference.toFixed(2)} m`}
+                </span>
               </article>
               <article className="data-card">
                 <span>警戒水位</span>
                 <strong>{waterData.warning_level.toFixed(2)} <small>m</small></strong>
+                <span className="data-card-sub">本站水位安全阈值</span>
               </article>
               <article className="data-card rainfall-card">
                 <span>当前降雨量</span>
                 <strong>{(waterData.rainfall || 0).toFixed(1)} <small>mm</small></strong>
+                <span className="data-card-sub">本站点实时累计降雨</span>
               </article>
               <article className={`data-card status-card ${getStatusClass(status)}`}>
                 <span>综合状态</span>
                 <strong>{status}</strong>
+                <span className="data-card-sub">
+                  {status === '正常' ? '整体态势平稳'
+                    : status === '注意' ? '需密切关注水位涨落'
+                    : status === '警戒' ? '需加强监测与值守'
+                    : '建议启动应急响应'}
+                </span>
               </article>
             </section>
 
@@ -1967,14 +2093,18 @@ function MonitorApp({ user, token, onLogout }) {
         {trendData.length > 0 && (
           <section className="trend-section" aria-label="水位变化趋势">
             <h2>水位变化趋势</h2>
-            <ReactECharts option={waterChartOption} style={{ height: '340px' }} />
+            <div className="chart-frame">
+              <ReactECharts option={waterChartOption} style={{ height: '340px' }} />
+            </div>
           </section>
         )}
 
         {trendData.length > 0 && (
           <section className="trend-section" aria-label="降雨量趋势">
             <h2>降雨量趋势</h2>
-            <ReactECharts option={rainfallChartOption} style={{ height: '300px' }} />
+            <div className="chart-frame">
+              <ReactECharts option={rainfallChartOption} style={{ height: '300px' }} />
+            </div>
           </section>
         )}
 
@@ -2096,13 +2226,19 @@ function MonitorApp({ user, token, onLogout }) {
                     <h3>水位变化</h3>
                     <ReactECharts
                       option={{
-                        tooltip: { trigger: 'axis' },
-                        grid: { left: 55, right: 30, top: 45, bottom: 50 },
-                        dataZoom: [{ type: 'inside', start: 0, end: 100 }],
+                        tooltip: { ...CHART_TOOLTIP, trigger: 'axis' },
+                        grid: { left: 52, right: 18, top: 32, bottom: 46 },
+                        dataZoom: [
+                          { type: 'inside', start: 0, end: 100, textStyle: { color: '#516c7a' } },
+                          { type: 'slider', start: 0, end: 100, height: 16, bottom: 8, borderColor: '#dde7ec', textStyle: { color: '#516c7a' } },
+                        ],
                         xAxis: {
                           type: 'category',
                           name: '时间',
+                          nameTextStyle: { ...CHART_NAME },
+                          ...CHART_AXIS,
                           axisLabel: {
+                            ...CHART_AXIS.axisLabel,
                             rotate: historyRange === '168h' ? 35 : 0,
                             formatter: (val) => {
                               const d = new Date(val)
@@ -2113,16 +2249,22 @@ function MonitorApp({ user, token, onLogout }) {
                           },
                           data: analysisData.history.data.map(d => d.timestamp),
                         },
-                        yAxis: { type: 'value', name: '水位（m）', axisLabel: { formatter: '{value} m' } },
+                        yAxis: {
+                          type: 'value',
+                          name: '水位（m）',
+                          nameTextStyle: { ...CHART_NAME },
+                          ...CHART_AXIS,
+                          axisLabel: { ...CHART_AXIS.axisLabel, formatter: '{value} m' },
+                        },
                         series: [{
                           name: '水位',
                           type: 'line',
                           data: analysisData.history.data.map(d => d.water_level),
                           smooth: true,
                           symbolSize: 6,
-                          lineStyle: { color: '#0b5d74', width: 2 },
-                          itemStyle: { color: '#0b5d74' },
-                          areaStyle: { color: 'rgba(11, 93, 116, 0.08)' },
+                          lineStyle: { color: '#0e7490', width: 2 },
+                          itemStyle: { color: '#0e7490' },
+                          areaStyle: { color: 'rgba(14, 116, 144, 0.08)' },
                           markLine: analysisData.statistics && analysisData.statistics.sufficient
                             ? {
                                 symbol: 'none',
@@ -2140,13 +2282,19 @@ function MonitorApp({ user, token, onLogout }) {
                     <h3>降雨分布</h3>
                     <ReactECharts
                       option={{
-                        tooltip: { trigger: 'axis' },
-                        grid: { left: 55, right: 30, top: 45, bottom: 50 },
-                        dataZoom: [{ type: 'inside', start: 0, end: 100 }],
+                        tooltip: { ...CHART_TOOLTIP, trigger: 'axis' },
+                        grid: { left: 52, right: 18, top: 32, bottom: 46 },
+                        dataZoom: [
+                          { type: 'inside', start: 0, end: 100, textStyle: { color: '#516c7a' } },
+                          { type: 'slider', start: 0, end: 100, height: 16, bottom: 8, borderColor: '#dde7ec', textStyle: { color: '#516c7a' } },
+                        ],
                         xAxis: {
                           type: 'category',
                           name: '时间',
+                          nameTextStyle: { ...CHART_NAME },
+                          ...CHART_AXIS,
                           axisLabel: {
+                            ...CHART_AXIS.axisLabel,
                             rotate: historyRange === '168h' ? 35 : 0,
                             formatter: (val) => {
                               const d = new Date(val)
@@ -2157,7 +2305,13 @@ function MonitorApp({ user, token, onLogout }) {
                           },
                           data: analysisData.history.data.map(d => d.timestamp),
                         },
-                        yAxis: { type: 'value', name: '降雨量（mm）', axisLabel: { formatter: '{value} mm' } },
+                        yAxis: {
+                          type: 'value',
+                          name: '降雨量（mm）',
+                          nameTextStyle: { ...CHART_NAME },
+                          ...CHART_AXIS,
+                          axisLabel: { ...CHART_AXIS.axisLabel, formatter: '{value} mm' },
+                        },
                         series: [{
                           name: '降雨量',
                           type: 'bar',
