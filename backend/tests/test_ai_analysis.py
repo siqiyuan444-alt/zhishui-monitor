@@ -1,9 +1,12 @@
-"""Stage 20A + 20B：AI 智能水情分析测试。
+"""Stage 20A + 20B + 20C + 20D：AI 智能水情分析测试。
 
 覆盖：
 - /api/ai-analysis 只读接口与 RuleBasedAnalyzer 规则分析；
 - OpenAIAnalyzer 真实 AI 分析器（Stage 20B）：选择、防抖降级、JSON 校验、
   安全修正、mock 数据免责声明、短时缓存；
+- LocalWaterAnalyzer 本地智能分析（Stage 20C）；
+- DoubaoAnalyzer 豆包大模型分析（Stage 20D）：选择、超时/HTTP/网络/格式错误、
+  本地 → 规则降级链、权威风险不降低、扩展字段、缓存隔离、限流、密钥不外泄；
 - 真实 HTTP 一律通过 monkeypatch 模拟，绝不消耗真实 API quota；
 - 验证 API Key 绝不进入响应与日志。
 """
@@ -17,6 +20,9 @@ import httpx
 import services.ai_analysis_service as ai_service
 from services.ai_analysis_service import (
     AIAnalysisContext,
+    DEFAULT_DOUBAO_API_BASE,
+    DEFAULT_DOUBAO_MODEL,
+    DoubaoAnalyzer,
     LocalWaterAnalyzer,
     OpenAIAnalyzer,
     RuleBasedAnalyzer,
@@ -664,4 +670,399 @@ def test_rule_and_openai_unaffected_by_local_source(monkeypatch):
     data = client.get("/api/ai-analysis").json()
     assert data["analysis_source"] == "rule_based"
     assert "真实 AI 分析暂不可用" in data["note"]
+    reset_ai_analysis_cache()
+
+
+# ──────────────────────────── Stage 20D：DoubaoAnalyzer ────────────────────────────
+
+DOUBAO_EXTENDED_KEYS = (
+    "water_overview",
+    "rainfall_analysis",
+    "risk_reasons",
+    "future_outlook",
+    "report",
+)
+
+
+def _valid_doubao_content(**overrides) -> str:
+    base = {
+        "risk_level": "attention",
+        "risk_score": 55,
+        "summary": "各站水位整体平稳，个别站点需适当关注。",
+        "key_findings": ["ST001 水位略高于注意阈值"],
+        "trend_analysis": {"overall": "过去 24 小时多数站点水位平稳。", "stations": []},
+        "abnormal_stations": [],
+        "recommendations": ["按常规频率继续监测水位变化。"],
+        "generated_at": "2026-01-01T00:00:00",
+        "analysis_source": "ai_model",
+        "note": "",
+        "water_overview": "总体判断：当前水情整体平稳。",
+        "risk_reasons": ["部分站点水位接近注意阈值"],
+        "rainfall_analysis": {
+            "overall": "降雨总体偏少。",
+            "stations": [{
+                "station_id": "ST001", "station_name": "都江堰水文站",
+                "total_rainfall": 12.5, "direction": "rising", "level": "小雨",
+            }],
+        },
+        "future_outlook": "未来 6 小时水位预计维持平稳。",
+        "report": "综合分析报告：各站水位整体平稳，建议继续监测。",
+    }
+    base.update(overrides)
+    return json.dumps(base, ensure_ascii=False)
+
+
+def _set_doubao_env(monkeypatch, key: str = "ark-fake-key-for-test", **extra):
+    monkeypatch.setenv("AI_ANALYZER", "doubao")
+    monkeypatch.setenv("ARK_API_KEY", key)
+    monkeypatch.setenv("AI_ANALYSIS_CACHE_SECONDS", "0")
+    for name, value in extra.items():
+        monkeypatch.setenv(name, value)
+
+
+def test_doubao_analyzer_selected_with_env(monkeypatch):
+    monkeypatch.setenv("AI_ANALYZER", "doubao")
+    analyzer = get_ai_analyzer()
+    assert isinstance(analyzer, DoubaoAnalyzer)
+    assert analyzer.analysis_source == "ai_model"
+    assert analyzer.provider == "doubao"
+    monkeypatch.setenv("AI_ANALYZER", "ark")
+    assert isinstance(get_ai_analyzer(), DoubaoAnalyzer)
+
+
+def test_doubao_default_model_and_base(monkeypatch):
+    monkeypatch.delenv("DOUBAO_MODEL", raising=False)
+    monkeypatch.delenv("DOUBAO_API_BASE_URL", raising=False)
+    analyzer = DoubaoAnalyzer()
+    assert analyzer.model_name == DEFAULT_DOUBAO_MODEL
+    assert DEFAULT_DOUBAO_MODEL == "doubao-seed-2-0-lite-260215"
+    assert analyzer.api_base == DEFAULT_DOUBAO_API_BASE
+    assert DEFAULT_DOUBAO_API_BASE == "https://ark.cn-beijing.volces.com/api/v3"
+
+
+def test_doubao_missing_api_key_falls_back_to_local(monkeypatch):
+    _set_doubao_env(monkeypatch)
+    monkeypatch.delenv("ARK_API_KEY", raising=False)
+    _reset_alerts()
+    _set_all_normal()
+    resp = client.get("/api/ai-analysis")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["analysis_source"] == "local_intelligence"
+    assert "豆包分析暂不可用，当前使用本地智能分析结果" in data["note"]
+
+
+def test_doubao_success_returns_structured_extended(monkeypatch):
+    _set_doubao_env(monkeypatch, DOUBAO_MODEL="test-doubao-model")
+    calls = []
+    monkeypatch.setattr(
+        ai_service.httpx,
+        "post",
+        lambda *a, **kw: (calls.append(kw), _fake_openai_resp(_valid_doubao_content()))[1],
+    )
+    _reset_alerts()
+    _set_all_normal()
+    resp = client.get("/api/ai-analysis")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["analysis_source"] == "ai_model"
+    assert data["analysis_provider"] == "doubao"
+    assert data["model_name"] == "test-doubao-model"
+    _assert_ai_structure(data)
+    for key in DOUBAO_EXTENDED_KEYS:
+        assert key in data, f"豆包输出缺少扩展字段 {key}"
+    assert calls, "豆包分析器应发起一次 HTTP 调用"
+    assert calls[0]["json"]["model"] == "test-doubao-model"
+
+
+def test_doubao_empty_content_falls_back_to_local(monkeypatch):
+    _set_doubao_env(monkeypatch)
+    monkeypatch.setattr(
+        ai_service.httpx, "post", lambda *a, **kw: _fake_openai_resp("")
+    )
+    _reset_alerts()
+    _set_all_normal()
+    data = client.get("/api/ai-analysis").json()
+    assert data["analysis_source"] == "local_intelligence"
+    assert "豆包分析暂不可用" in data["note"]
+
+
+def test_doubao_missing_choices_falls_back(monkeypatch):
+    _set_doubao_env(monkeypatch)
+
+    class EmptyBody:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {}
+
+    monkeypatch.setattr(ai_service.httpx, "post", lambda *a, **kw: EmptyBody())
+    _reset_alerts()
+    _set_all_normal()
+    data = client.get("/api/ai-analysis").json()
+    assert data["analysis_source"] == "local_intelligence"
+
+
+def test_doubao_timeout_falls_back_to_local(monkeypatch):
+    _set_doubao_env(monkeypatch)
+
+    def raise_timeout(*a, **kw):
+        raise httpx.TimeoutException("timed out")
+
+    monkeypatch.setattr(ai_service.httpx, "post", raise_timeout)
+    _reset_alerts()
+    _set_all_normal()
+    data = client.get("/api/ai-analysis").json()
+    assert data["analysis_source"] == "local_intelligence"
+    assert "豆包分析暂不可用" in data["note"]
+
+
+def test_doubao_http_429_falls_back(monkeypatch):
+    _set_doubao_env(monkeypatch)
+    req = httpx.Request("POST", "https://ark.cn-beijing.volces.com/api/v3/chat/completions")
+    err = httpx.HTTPStatusError(
+        "429 Too Many Requests", request=req, response=httpx.Response(429, request=req)
+    )
+    monkeypatch.setattr(ai_service.httpx, "post", lambda *a, **kw: (_ for _ in ()).throw(err))
+    _reset_alerts()
+    _set_all_normal()
+    assert client.get("/api/ai-analysis").json()["analysis_source"] == "local_intelligence"
+
+
+def test_doubao_http_500_falls_back(monkeypatch):
+    _set_doubao_env(monkeypatch)
+    req = httpx.Request("POST", "https://ark.cn-beijing.volces.com/api/v3/chat/completions")
+    err = httpx.HTTPStatusError(
+        "500 Internal Server Error", request=req, response=httpx.Response(500, request=req)
+    )
+    monkeypatch.setattr(ai_service.httpx, "post", lambda *a, **kw: (_ for _ in ()).throw(err))
+    _reset_alerts()
+    _set_all_normal()
+    data = client.get("/api/ai-analysis").json()
+    assert data["analysis_source"] == "local_intelligence"
+    assert "豆包分析暂不可用" in data["note"]
+
+
+def test_doubao_network_error_falls_back(monkeypatch):
+    _set_doubao_env(monkeypatch)
+    monkeypatch.setattr(
+        ai_service.httpx,
+        "post",
+        lambda *a, **kw: (_ for _ in ()).throw(httpx.ConnectError("connection refused")),
+    )
+    _reset_alerts()
+    _set_all_normal()
+    assert client.get("/api/ai-analysis").json()["analysis_source"] == "local_intelligence"
+
+
+def test_doubao_invalid_json_falls_back(monkeypatch):
+    _set_doubao_env(monkeypatch)
+    monkeypatch.setattr(
+        ai_service.httpx, "post", lambda *a, **kw: _fake_openai_resp("这不是 JSON")
+    )
+    _reset_alerts()
+    _set_all_normal()
+    data = client.get("/api/ai-analysis").json()
+    assert data["analysis_source"] == "local_intelligence"
+    assert "豆包分析暂不可用" in data["note"]
+
+
+def test_doubao_invalid_risk_level_falls_back(monkeypatch):
+    _set_doubao_env(monkeypatch)
+    monkeypatch.setattr(
+        ai_service.httpx,
+        "post",
+        lambda *a, **kw: _fake_openai_resp(_valid_doubao_content(risk_level="critical")),
+    )
+    _reset_alerts()
+    _set_all_normal()
+    assert client.get("/api/ai-analysis").json()["analysis_source"] == "local_intelligence"
+
+
+def test_doubao_invalid_risk_score_falls_back(monkeypatch):
+    _set_doubao_env(monkeypatch)
+    _reset_alerts()
+    _set_all_normal()
+    for bad in ("high", 150, -5):
+        monkeypatch.setattr(
+            ai_service.httpx,
+            "post",
+            lambda *a, **kw: _fake_openai_resp(_valid_doubao_content(risk_score=bad)),
+        )
+        assert client.get("/api/ai-analysis").json()["analysis_source"] == "local_intelligence"
+
+
+def test_doubao_local_failure_then_rule_fallback(monkeypatch):
+    _set_doubao_env(monkeypatch)
+    _reset_alerts()
+    _set_all_normal()
+
+    def boom(self, context):
+        raise RuntimeError("doubao and local crashed")
+
+    monkeypatch.setattr(ai_service.DoubaoAnalyzer, "analyze", boom)
+    monkeypatch.setattr(ai_service.LocalWaterAnalyzer, "analyze", boom)
+    data = client.get("/api/ai-analysis").json()
+    assert data["analysis_source"] == "rule_based"
+    assert "豆包分析暂不可用，当前使用规则分析结果" in data["note"]
+    _assert_ai_structure(data)
+
+
+def test_doubao_failure_to_local_returns_local_not_rule(monkeypatch):
+    _set_doubao_env(monkeypatch)
+    reset_ai_analysis_cache()
+
+    def boom(self, context):
+        raise RuntimeError("doubao crashed")
+
+    monkeypatch.setattr(ai_service.DoubaoAnalyzer, "analyze", boom)
+    _reset_alerts()
+    _set_all_normal()
+    data = client.get("/api/ai-analysis").json()
+    assert data["analysis_source"] == "local_intelligence"
+    assert "豆包分析暂不可用，当前使用本地智能分析结果" in data["note"]
+    _assert_ai_structure(data)
+    reset_ai_analysis_cache()
+
+
+def test_doubao_cannot_lower_system_severe_risk(monkeypatch):
+    _set_doubao_env(monkeypatch)
+    monkeypatch.setattr(
+        ai_service.httpx,
+        "post",
+        lambda *a, **kw: _fake_openai_resp(
+            _valid_doubao_content(risk_level="normal", risk_score=10)
+        ),
+    )
+    _reset_alerts()
+    _set_all_normal()
+    _latest_water("ST001", 5.5, 0.0)  # 超警，系统权威风险 severe
+    data = client.get("/api/ai-analysis").json()
+    assert data["analysis_source"] == "ai_model"
+    assert data["risk_level"] == "severe"
+    assert data["risk_score"] >= 95
+    assert any(s["station_id"] == "ST001" for s in data["abnormal_stations"])
+
+
+def test_doubao_strong_rain_flags_station(monkeypatch):
+    _set_doubao_env(monkeypatch)
+    rainy = {
+        "overall": "ST003 出现强降雨。",
+        "stations": [{
+            "station_id": "ST003", "station_name": "龙泉驿水文站",
+            "total_rainfall": 60.0, "direction": "rising", "level": "暴雨",
+        }],
+    }
+    monkeypatch.setattr(
+        ai_service.httpx,
+        "post",
+        lambda *a, **kw: _fake_openai_resp(_valid_doubao_content(rainfall_analysis=rainy)),
+    )
+    _reset_alerts()
+    _set_all_normal()
+    _latest_water("ST003", 2.5, 60.0)
+    data = client.get("/api/ai-analysis").json()
+    assert any(a["station_id"] == "ST003" for a in data["abnormal_stations"])
+    assert data["rainfall_analysis"]["stations"][0]["station_id"] == "ST003"
+    assert data["rainfall_analysis"]["stations"][0]["total_rainfall"] >= 50
+
+
+def test_doubao_output_structure_compatible(monkeypatch):
+    _set_doubao_env(monkeypatch)
+    monkeypatch.setattr(
+        ai_service.httpx,
+        "post",
+        lambda *a, **kw: _fake_openai_resp(_valid_doubao_content()),
+    )
+    _reset_alerts()
+    _set_all_normal()
+    data = client.get("/api/ai-analysis").json()
+    _assert_ai_structure(data)
+    assert data["risk_level"] in VALID_RISK_LEVELS
+    assert isinstance(data["report"], str) and data["report"]
+    assert isinstance(data["rainfall_analysis"], dict)
+
+
+def test_doubao_api_key_not_in_response(monkeypatch):
+    secret = "ark-FAKE-SECRET-KEY-54321"
+    _set_doubao_env(monkeypatch, key=secret)
+    monkeypatch.setattr(
+        ai_service.httpx, "post", lambda *a, **kw: _fake_openai_resp("bad response")
+    )
+    _reset_alerts()
+    _set_all_normal()
+    data = client.get("/api/ai-analysis").json()
+    assert secret not in str(data)
+    assert secret.lower() not in str(data).lower()
+
+
+def test_doubao_api_key_not_in_logs(monkeypatch, caplog):
+    secret = "ark-FAKE-SECRET-KEY-54321"
+    _set_doubao_env(monkeypatch, key=secret)
+    monkeypatch.setattr(
+        ai_service.httpx,
+        "post",
+        lambda *a, **kw: (_ for _ in ()).throw(httpx.ConnectError("refused")),
+    )
+    _reset_alerts()
+    _set_all_normal()
+    client.get("/api/ai-analysis")
+    assert secret not in caplog.text
+
+
+def test_doubao_cache_isolated_from_openai(monkeypatch):
+    reset_ai_analysis_cache()
+    calls = {"n": 0}
+
+    def fake_post(*a, **kw):
+        calls["n"] += 1
+        return _fake_openai_resp(_valid_doubao_content())
+
+    _reset_alerts()
+    _set_all_normal()
+    _latest_water("ST001", 1.41, 0.0)
+
+    monkeypatch.setenv("AI_ANALYZER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-key-for-test")
+    monkeypatch.setenv("AI_ANALYSIS_CACHE_SECONDS", "60")
+    monkeypatch.setattr(ai_service.httpx, "post", fake_post)
+    assert client.get("/api/ai-analysis").json()["analysis_source"] == "ai_model"
+
+    monkeypatch.setenv("AI_ANALYZER", "doubao")
+    monkeypatch.setenv("ARK_API_KEY", "ark-fake-key-for-test")
+    data = client.get("/api/ai-analysis").json()
+    assert data["analysis_source"] == "ai_model"
+    assert data["analysis_provider"] == "doubao"
+    assert calls["n"] == 2, "不同 provider 不应共享 AI 结果缓存"
+    reset_ai_analysis_cache()
+
+
+def test_doubao_rate_limit_applies(monkeypatch):
+    _set_doubao_env(monkeypatch)
+    monkeypatch.setenv("AI_RATE_LIMIT_PER_MINUTE", "2")
+    monkeypatch.setattr(
+        ai_service.httpx,
+        "post",
+        lambda *a, **kw: _fake_openai_resp(_valid_doubao_content()),
+    )
+    _reset_alerts()
+    _set_all_normal()
+    statuses = [client.get("/api/ai-analysis").status_code for _ in range(3)]
+    assert statuses == [200, 200, 429]
+
+
+def test_openai_and_local_unaffected_by_doubao_changes(monkeypatch):
+    monkeypatch.setenv("AI_ANALYZER", "openai")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    _reset_alerts()
+    _set_all_normal()
+    data = client.get("/api/ai-analysis").json()
+    assert data["analysis_source"] == "rule_based"
+    assert "真实 AI 分析暂不可用" in data["note"]
+    assert "analysis_provider" not in data
+
+    monkeypatch.setenv("AI_ANALYZER", "local")
+    data2 = client.get("/api/ai-analysis").json()
+    assert data2["analysis_source"] == "local_intelligence"
     reset_ai_analysis_cache()

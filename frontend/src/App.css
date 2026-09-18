@@ -3899,6 +3899,12 @@ h1 {
   color: var(--c-primary);
 }
 
+.ai-source-tag.is-doubao {
+  background: #eee9fb;
+  border-color: #d6cbf3;
+  color: #5b3fa8;
+}
+
 .ai-report-box {
   margin-top: 16px;
   padding: 14px 16px;

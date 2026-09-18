@@ -158,8 +158,10 @@ function aiRiskClass(level) {
   return AI_RISK_CLASS[level] || 'ai-risk-normal'
 }
 
-function aiSourceLabel(source) {
-  if (source === 'ai_model') return 'AI 模型分析'
+function aiSourceLabel(source, provider) {
+  if (source === 'ai_model') {
+    return provider === 'doubao' ? '豆包大模型' : 'AI 模型分析'
+  }
   if (source === 'local_intelligence') return '本地智能分析'
   return '规则分析（AI 暂不可用）'
 }
@@ -1756,9 +1758,9 @@ function MonitorApp({ user, token, onLogout }) {
         <section className="ai-analysis-section" id="ai" aria-label="AI 智能水情分析">
           <div className="ai-header">
             <h2>AI 智能水情分析</h2>
-            <span className={`ai-source-tag ${aiAnalysis && aiAnalysis.analysis_source === 'ai_model' ? 'is-ai' : aiAnalysis && aiAnalysis.analysis_source === 'local_intelligence' ? 'is-local' : 'is-rule'}`}>
+            <span className={`ai-source-tag ${aiAnalysis && aiAnalysis.analysis_source === 'local_intelligence' ? 'is-local' : aiAnalysis && aiAnalysis.analysis_source === 'ai_model' ? (aiAnalysis.analysis_provider === 'doubao' ? 'is-doubao' : 'is-ai') : 'is-rule'}`}>
               分析来源：
-              {aiAnalysis ? aiSourceLabel(aiAnalysis.analysis_source) : '规则分析（暂未接入外部 AI 模型）'}
+              {aiAnalysis ? aiSourceLabel(aiAnalysis.analysis_source, aiAnalysis.analysis_provider) : '规则分析（暂未接入外部 AI 模型）'}
             </span>
           </div>
           <div className="ai-actions">
@@ -1795,7 +1797,7 @@ function MonitorApp({ user, token, onLogout }) {
                   {aiAnalysis.analysis_source && (
                     <p className="ai-source-note">
                       分析来源：
-                      {aiSourceLabel(aiAnalysis.analysis_source)}
+                      {aiSourceLabel(aiAnalysis.analysis_source, aiAnalysis.analysis_provider)}
                       {aiAnalysis.model_name ? `　模型：${aiAnalysis.model_name}` : ''}
                       {aiAnalysis.generated_at ? `　生成时间：${formatUpdateTime(aiAnalysis.generated_at)}` : ''}
                     </p>

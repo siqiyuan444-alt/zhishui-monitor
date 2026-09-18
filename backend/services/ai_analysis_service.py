@@ -10,7 +10,12 @@
   风险/预警结果动态生成中文分析，风险等级严格采纳规则权威结论，绝不降低；
 - OpenAIAnalyzer：真实 AI 模型分析（Stage 20B），analysis_source = "ai_model"，
   通过环境变量 AI_ANALYZER=openai 启用，失败时由 generate_ai_analysis() 自动
-  降级为 RuleBasedAnalyzer，绝不因 AI 失败导致水情监测系统不可用。
+  降级为 RuleBasedAnalyzer，绝不因 AI 失败导致水情监测系统不可用；
+- DoubaoAnalyzer：豆包大模型分析（Stage 20D），通过火山方舟在线推理
+  OpenAI 兼容接口调用（Base URL 默认 https://ark.cn-beijing.volces.com/api/v3），
+  analysis_source = "ai_model" 且 analysis_provider = "doubao"，
+  通过环境变量 AI_ANALYZER=doubao 启用，API Key 仅从 ARK_API_KEY 读取；
+  失败时自动降级 LocalWaterAnalyzer，再降级 RuleBasedAnalyzer。
 
 安全与边界：
 - API Key / Client Secret 只从环境变量读取，绝不写入代码、日志、异常信息或响应；
@@ -60,6 +65,10 @@ RISK_ORDER = {"normal": 0, "attention": 1, "warning": 2, "severe": 3}
 DEFAULT_AI_MODEL = "gpt-4o-mini"
 DEFAULT_AI_TIMEOUT = 30
 DEFAULT_AI_CACHE_SECONDS = 60
+
+# 豆包大模型（火山方舟在线推理，OpenAI 兼容接口，Stage 20D）
+DEFAULT_DOUBAO_MODEL = "doubao-seed-2-0-lite-260215"
+DEFAULT_DOUBAO_API_BASE = "https://ark.cn-beijing.volces.com/api/v3"
 
 # 现有水情状态 → AI 风险等级 / 基础评分映射（与 calculate_status 保持一致）
 STATUS_AI_RISK = {
@@ -182,6 +191,7 @@ class AIAnalysisOutput:
     analysis_source: str
     note: str = ""
     model_name: str = ""
+    analysis_provider: str = ""
     water_overview: str = ""
     rainfall_analysis: dict = field(default_factory=dict)
     risk_reasons: list = field(default_factory=list)
@@ -203,6 +213,8 @@ class AIAnalysisOutput:
         }
         if self.model_name:
             data["model_name"] = self.model_name
+        if self.analysis_provider:
+            data["analysis_provider"] = self.analysis_provider
         if self.water_overview:
             data["water_overview"] = self.water_overview
         if self.rainfall_analysis:
@@ -227,6 +239,7 @@ class BaseAIAnalyzer(ABC):
     """
 
     analysis_source: str = "rule_based"
+    provider: str = ""
 
     @abstractmethod
     def analyze(self, context: AIAnalysisContext) -> dict:
@@ -247,6 +260,7 @@ class RuleBasedAnalyzer(BaseAIAnalyzer):
     """
 
     analysis_source = "rule_based"
+    provider = "rule_based"
 
     def analyze(self, context: AIAnalysisContext) -> dict:
         now_iso = datetime.now().isoformat(timespec="seconds")
@@ -448,8 +462,8 @@ def reset_ai_analysis_cache() -> None:
     _AI_CACHE.clear()
 
 
-def _cache_key(hours: int, context: "AIAnalysisContext") -> str:
-    """以 hours + 当前各站最新数据状态 + 未解除预警集合作为指纹。"""
+def _cache_key(hours: int, context: "AIAnalysisContext", provider: str = "") -> str:
+    """以 provider + hours + 当前各站最新数据状态 + 未解除预警集合作为指纹。"""
     states = sorted(
         f"{s.station_id}:{_to_float(s.water_level):.3f}:{_to_float(s.rainfall):.1f}:{s.collected_at or ''}"
         for s in (context.stations or [])
@@ -458,7 +472,7 @@ def _cache_key(hours: int, context: "AIAnalysisContext") -> str:
     fingerprint = hashlib.sha256(
         "|".join(states + [f"alerts:{alert_ids}"]).encode("utf-8")
     ).hexdigest()[:16]
-    return f"ai-analysis:{int(hours)}:{fingerprint}"
+    return f"ai-analysis:{int(hours)}:{provider}:{fingerprint}"
 
 
 # ──────────────────────────── 通用辅助 ────────────────────────────
@@ -502,6 +516,7 @@ class OpenAIAnalyzer(BaseAIAnalyzer):
     """
 
     analysis_source = "ai_model"
+    provider = "openai"
 
     def __init__(self):
         self.model_name = os.environ.get("AI_MODEL", "").strip() or DEFAULT_AI_MODEL
@@ -566,8 +581,8 @@ class OpenAIAnalyzer(BaseAIAnalyzer):
         return content
 
 
-def _build_system_prompt() -> str:
-    return (
+def _build_system_prompt(include_extra: bool = False) -> str:
+    base = (
         "你是智慧水利水情分析助手。请仅依据系统传入的水情数据进行分析研判，并严格输出 JSON。\n"
         "硬性要求：\n"
         "1. 不得修改、虚构或遗漏任何输入数据；不得虚构水文站、水位、降雨量或预警信息。\n"
@@ -583,11 +598,26 @@ def _build_system_prompt() -> str:
         "status, water_level, warning_level, rainfall, trend；\n"
         "   trend_analysis 为对象，包含 overall(字符串) 与 stations(对象数组，"
         "元素含 station_id, station_name, direction, description)。\n"
-        "8. 输出只允许 JSON，不要包含 JSON 之外的解释文字或代码围栏。"
     )
+    if include_extra:
+        base += (
+            "8. 在满足上述字段的基础上，必须额外输出以下分析字段：\n"
+            "   water_overview(总体判断，字符串)；\n"
+            "   risk_reasons(风险原因，字符串数组)；\n"
+            "   rainfall_analysis(降雨分析，对象，含 overall(字符串) 与 stations(对象数组，"
+            "元素含 station_id, station_name, total_rainfall, direction, level))；\n"
+            "   future_outlook(未来展望，基于 forecast 预测，字符串)；\n"
+            "   report(综合分析报告，将总体判断、关键发现、趋势、风险原因、降雨、未来展望、"
+            "建议整合为一段完整中文报告，字符串)。\n"
+            "9. 你只负责自然语言分析解释，不得修改或降低系统给出的权威风险等级与风险评分。\n"
+            "10. 输出只允许 JSON，不要包含 JSON 之外的解释文字或代码围栏。\n"
+        )
+    else:
+        base += "8. 输出只允许 JSON，不要包含 JSON 之外的解释文字或代码围栏。"
+    return base
 
 
-def _build_user_prompt(context: AIAnalysisContext) -> str:
+def _build_user_prompt(context: AIAnalysisContext, include_extra: bool = False) -> str:
     payload = {
         "hours": int(context.hours or 24),
         "stations": [
@@ -637,11 +667,27 @@ def _build_user_prompt(context: AIAnalysisContext) -> str:
         "alert_summary": context.alert_summary or {},
         "risk_ranking": (context.risk_ranking or [])[:20],
     }
+    if include_extra:
+        payload["rainfall_trends"] = {
+            sid: {
+                "total": rt.get("total"),
+                "direction": rt.get("direction"),
+                "recent_values": (rt.get("recent_values") or [])[-12:],
+            }
+            for sid, rt in (context.rainfall_trends or {}).items()
+        }
+        payload["forecasts"] = {
+            sid: dict(fn or {}) for sid, fn in (context.forecasts or {}).items()
+        }
     return json.dumps(payload, ensure_ascii=False)
 
 
-def _parse_and_validate(content: str) -> dict:
-    """解析 AI 返回内容并做 Schema 校验；失败抛出 AIAnalysisError。"""
+def _parse_and_validate(content: str, require_extended: bool = False) -> dict:
+    """解析 AI 返回内容并做 Schema 校验；失败抛出 AIAnalysisError。
+
+    require_extended=True 时额外清洗豆包扩展字段（Stage 20D），
+    基础字段校验逻辑与 openai 完全一致，不影响既有行为。
+    """
     try:
         text = content.strip()
         if text.startswith("```"):
@@ -656,7 +702,10 @@ def _parse_and_validate(content: str) -> dict:
         raise AIAnalysisError(f"AI 返回 JSON 解析失败: {type(exc).__name__}") from None
     if not isinstance(raw, dict):
         raise AIAnalysisError("AI 返回内容不是 JSON 对象")
-    return _validate_output(raw)
+    result = _validate_output(raw)
+    if require_extended:
+        _attach_extended_fields(raw, result)
+    return result
 
 
 def _validate_output(raw: dict) -> dict:
@@ -743,6 +792,59 @@ def _clean_trend_station(x: dict) -> dict:
     }
 
 
+def _clean_rain_station(x: dict) -> dict:
+    return {
+        "station_id": _safe_str(x.get("station_id")),
+        "station_name": _safe_str(x.get("station_name")) or _safe_str(x.get("station_id")),
+        "total_rainfall": round(_to_float(x.get("total_rainfall")), 1),
+        "direction": _safe_str(x.get("direction")) or "insufficient",
+        "level": _truncate(_safe_str(x.get("level")), 50),
+    }
+
+
+def _clean_rainfall_analysis(value) -> dict:
+    """清洗可选降雨分析字段；结构非法或为空时返回空 dict（不进入响应）。"""
+    if not isinstance(value, dict):
+        return {}
+    stations = value.get("stations")
+    cleaned = {
+        "overall": _truncate(_safe_str(value.get("overall")), 1000),
+        "stations": [_clean_rain_station(x) for x in stations if isinstance(x, dict)][:50]
+        if isinstance(stations, list)
+        else [],
+    }
+    if cleaned["overall"] or cleaned["stations"]:
+        return cleaned
+    return {}
+
+
+def _attach_extended_fields(raw: dict, result: dict) -> None:
+    """为豆包输出附加可选扩展字段（Stage 20D）。缺失字段不产生键，向后兼容。"""
+    water_overview = _truncate(_safe_str(raw.get("water_overview")), 2000)
+    if water_overview:
+        result["water_overview"] = water_overview
+
+    rainfall = _clean_rainfall_analysis(raw.get("rainfall_analysis"))
+    if rainfall:
+        result["rainfall_analysis"] = rainfall
+
+    reasons = [
+        _truncate(_safe_str(x), 500)
+        for x in raw.get("risk_reasons", [])
+        if isinstance(x, (str, int, float)) and _safe_str(x).strip()
+    ][:8]
+    if reasons:
+        result["risk_reasons"] = reasons
+
+    future = _truncate(_safe_str(raw.get("future_outlook")), 1000)
+    if future:
+        result["future_outlook"] = future
+
+    report = _truncate(_safe_str(raw.get("report")), 4000)
+    if report:
+        result["report"] = report
+
+
 def _apply_safety_correction(context: AIAnalysisContext, data: dict) -> dict:
     """AI 是分析解释层，不是新的安全规则引擎。
 
@@ -768,6 +870,101 @@ def _apply_safety_correction(context: AIAnalysisContext, data: dict) -> dict:
     if not data["key_findings"]:
         data["key_findings"] = list(rule["key_findings"])
     return data
+
+
+# ──────────────────────────── 豆包大模型分析器（Stage 20D） ────────────────────────────
+
+
+class DoubaoAnalyzer(BaseAIAnalyzer):
+    """豆包大模型分析器（火山方舟在线推理，OpenAI 兼容接口）。
+
+    - Base URL 默认 https://ark.cn-beijing.volces.com/api/v3（在线推理，非 Coding Plan）；
+    - API Key 只从环境变量 ARK_API_KEY 读取，绝不写入代码 / 日志 / 响应；
+    - 模型 ID 通过 DOUBAO_MODEL 配置，默认 doubao-seed-2-0-lite-260215；
+    - 复用项目已有 httpx 与 OpenAI 兼容 /chat/completions 协议，不新增依赖；
+    - analysis_source = "ai_model" 且 analysis_provider = "doubao"，
+      自动复用现有 AI 缓存、限流与超时机制；
+    - 任何失败（缺 key、超时、网络、HTTP 4xx/429/5xx、格式/结构错误、空内容）
+      均抛出 AIAnalysisError，由 generate_ai_analysis() 降级为 LocalWaterAnalyzer，
+      再降级 RuleBasedAnalyzer，绝不向客户端抛 500；
+    - 风险等级受 _apply_safety_correction 约束，只能与系统权威风险一致或更高，
+      绝不允许降低。
+    """
+
+    analysis_source = "ai_model"
+    provider = "doubao"
+
+    def __init__(self):
+        self.model_name = (
+            os.environ.get("DOUBAO_MODEL", "").strip() or DEFAULT_DOUBAO_MODEL
+        )
+        self.api_base = (
+            os.environ.get("DOUBAO_API_BASE_URL", "").strip() or DEFAULT_DOUBAO_API_BASE
+        ).rstrip("/")
+        self.api_key = os.environ.get("ARK_API_KEY", "").strip()
+        self.timeout = _ai_timeout()
+
+    def analyze(self, context: AIAnalysisContext) -> dict:
+        if not self.api_key:
+            raise AIAnalysisError("未配置 ARK_API_KEY，无法调用豆包大模型")
+        content = self._call_model(context)
+        data = _parse_and_validate(content, require_extended=True)
+        data = _apply_safety_correction(context, data)
+        data = _append_in_note(data, _mock_data_disclaimer(context))
+        return AIAnalysisOutput(
+            risk_level=data["risk_level"],
+            risk_score=data["risk_score"],
+            summary=data["summary"],
+            key_findings=data["key_findings"],
+            trend_analysis=data["trend_analysis"],
+            abnormal_stations=data["abnormal_stations"],
+            recommendations=data["recommendations"],
+            generated_at=data["generated_at"],
+            analysis_source="ai_model",
+            note=data.get("note", ""),
+            model_name=self.model_name,
+            analysis_provider="doubao",
+            water_overview=data.get("water_overview", ""),
+            rainfall_analysis=data.get("rainfall_analysis", {}),
+            risk_reasons=data.get("risk_reasons", []),
+            future_outlook=data.get("future_outlook", ""),
+            report=data.get("report", ""),
+        ).to_dict()
+
+    def _call_model(self, context: AIAnalysisContext) -> str:
+        url = f"{self.api_base}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": self.model_name,
+            "temperature": 0.2,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": _build_system_prompt(include_extra=True)},
+                {"role": "user", "content": _build_user_prompt(context, include_extra=True)},
+            ],
+        }
+        try:
+            resp = httpx.post(url, headers=headers, json=payload, timeout=self.timeout)
+            resp.raise_for_status()
+            body = resp.json()
+        except httpx.TimeoutException:
+            raise AIAnalysisError("豆包 API 请求超时") from None
+        except httpx.HTTPStatusError as exc:
+            raise AIAnalysisError(
+                f"豆包 API 调用失败: HTTP {exc.response.status_code}"
+            ) from None
+        except Exception as exc:
+            raise AIAnalysisError(f"豆包 API 请求异常: {type(exc).__name__}") from None
+        try:
+            content = body["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError):
+            raise AIAnalysisError("豆包 API 响应缺少 choices/message/content") from None
+        if not isinstance(content, str) or not content.strip():
+            raise AIAnalysisError("豆包 API 返回内容为空")
+        return content
 
 
 # ──────────────────────────── LocalWaterAnalyzer（零费用本地智能分析） ────────────────────────────
@@ -851,6 +1048,7 @@ class LocalWaterAnalyzer(BaseAIAnalyzer):
     """
 
     analysis_source = "local_intelligence"
+    provider = "local_intelligence"
 
     def analyze(self, context: AIAnalysisContext) -> dict:
         now_iso = datetime.now().isoformat(timespec="seconds")
@@ -1195,6 +1393,8 @@ def get_ai_analyzer(name: str = None) -> BaseAIAnalyzer:
     - rule_based：默认规则分析，不调用任何外部 API；
     - local：LocalWaterAnalyzer 本地智能分析，零 API 费用、完全离线，
       失败自动降级 rule_based；
+    - doubao：DoubaoAnalyzer 豆包大模型（火山方舟在线推理，需配置 ARK_API_KEY，
+      失败自动降级 local → rule_based）；
     - openai：OpenAI 兼容真实 AI 分析器（需配置 OPENAI_API_KEY，失败自动降级）。
     """
     analyzer_name = (name or os.environ.get("AI_ANALYZER", "rule_based")).strip().lower()
@@ -1202,6 +1402,8 @@ def get_ai_analyzer(name: str = None) -> BaseAIAnalyzer:
         return RuleBasedAnalyzer()
     if analyzer_name in ("local", "local_intelligence", "本地", "local_ai"):
         return LocalWaterAnalyzer()
+    if analyzer_name in ("doubao", "doubao_analyzer", "豆包", "ark", "volcano"):
+        return DoubaoAnalyzer()
     if analyzer_name in ("openai", "gpt", "chatgpt", "ai_model"):
         return OpenAIAnalyzer()
     raise AIAnalysisError(f"未知的 AI 分析器配置: {analyzer_name}")
@@ -1303,37 +1505,69 @@ def generate_ai_analysis(hours: int = 24) -> dict:
     - 默认 rule_based，不产生任何外部 AI API 调用；
     - AI_ANALYZER=local 时使用 LocalWaterAnalyzer 本地智能分析（离线、零费用），
       任何失败自动降级 RuleBasedAnalyzer；
+    - AI_ANALYZER=doubao 时调用豆包大模型；任何失败自动降级 LocalWaterAnalyzer，
+      再降级 RuleBasedAnalyzer，并在 note 中说明降级原因；
     - AI_ANALYZER=openai 时调用真实模型；任何失败自动降级 RuleBasedAnalyzer，
       并在 note 中说明“真实 AI 分析暂不可用，当前使用规则分析结果”；
     - 仅对真实模型成功结果做短时缓存（AI_ANALYSIS_CACHE_SECONDS 秒，默认 60），
-      相同 hours + 数据状态短时间内不重复调用模型。
+      相同 provider + hours + 数据状态短时间内不重复调用模型。
     """
     context = build_analysis_context(hours=hours)
     analyzer = get_ai_analyzer()
     is_ai = analyzer.analysis_source == "ai_model"
     cache_seconds = _cache_seconds()
-    key = _cache_key(hours, context) if (is_ai and cache_seconds > 0) else None
+    key = (
+        _cache_key(hours, context, getattr(analyzer, "provider", ""))
+        if (is_ai and cache_seconds > 0)
+        else None
+    )
     if key:
         entry = _AI_CACHE.get(key)
         if entry and (time.monotonic() - entry["ts"]) < cache_seconds:
             return dict(entry["data"])
     try:
         result = analyzer.analyze(context)
-        data = result.to_dict() if isinstance(result, AIAnalysisOutput) else result
+        data = _as_dict(result)
         fallback = False
     except Exception as exc:
         reason = exc if isinstance(exc, AIAnalysisError) else type(exc).__name__
         logger.warning("AI 模型分析失败，已降级为规则分析：%s", reason)
-        rule_result = RuleBasedAnalyzer().analyze(context)
-        rule = rule_result.to_dict() if isinstance(rule_result, AIAnalysisOutput) else rule_result
-        if analyzer.analysis_source == "local_intelligence":
-            fallback_note = "本地智能分析暂不可用，当前使用规则分析结果。"
-        else:
-            fallback_note = "真实 AI 分析暂不可用，当前使用规则分析结果。"
-        note = str(rule.get("note") or "")
-        rule["note"] = (fallback_note + " " + note) if note else fallback_note
-        data = rule
-        fallback = True
+        data, fallback = _fallback_analyzer(analyzer, context)
     if key and not fallback:
         _AI_CACHE[key] = {"ts": time.monotonic(), "data": dict(data)}
     return data
+
+
+def _as_dict(result) -> dict:
+    return result.to_dict() if isinstance(result, AIAnalysisOutput) else result
+
+
+def _fallback_analyzer(analyzer: BaseAIAnalyzer, context: AIAnalysisContext) -> tuple:
+    """分析器失败时的安全降级链（绝不向客户端抛 500）。
+
+    - DoubaoAnalyzer → LocalWaterAnalyzer → RuleBasedAnalyzer；
+    - openai / local → RuleBasedAnalyzer（保持既有 Stage 20B/20C 行为）。
+    """
+    if isinstance(analyzer, DoubaoAnalyzer):
+        try:
+            local = _as_dict(LocalWaterAnalyzer().analyze(context))
+            seg = "豆包分析暂不可用，当前使用本地智能分析结果。"
+            note = str(local.get("note") or "")
+            local["note"] = (seg + " " + note) if note else seg
+            return local, True
+        except Exception as exc:
+            logger.warning("本地智能分析降级同样失败，继续降级规则分析：%s", type(exc).__name__)
+        rule = _as_dict(RuleBasedAnalyzer().analyze(context))
+        seg = "豆包分析暂不可用，当前使用规则分析结果。"
+        note = str(rule.get("note") or "")
+        rule["note"] = (seg + " " + note) if note else seg
+        return rule, True
+
+    rule = _as_dict(RuleBasedAnalyzer().analyze(context))
+    if analyzer.analysis_source == "local_intelligence":
+        seg = "本地智能分析暂不可用，当前使用规则分析结果。"
+    else:
+        seg = "真实 AI 分析暂不可用，当前使用规则分析结果。"
+    note = str(rule.get("note") or "")
+    rule["note"] = (seg + " " + note) if note else seg
+    return rule, True
