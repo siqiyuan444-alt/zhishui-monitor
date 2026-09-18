@@ -17,8 +17,12 @@ import httpx
 import services.ai_analysis_service as ai_service
 from services.ai_analysis_service import (
     AIAnalysisContext,
+    LocalWaterAnalyzer,
     OpenAIAnalyzer,
     RuleBasedAnalyzer,
+    StationSnapshot,
+    TrendSnapshot,
+    build_analysis_context,
     get_ai_analyzer,
     reset_ai_analysis_cache,
 )
@@ -80,7 +84,7 @@ def _assert_ai_structure(data: dict):
     assert isinstance(data["abnormal_stations"], list)
     assert isinstance(data["recommendations"], list)
     assert data["generated_at"]
-    assert data["analysis_source"] in ("rule_based", "ai_model")
+    assert data["analysis_source"] in ("rule_based", "ai_model", "local_intelligence")
 
 
 def test_ai_analysis_returns_200_and_structure():
@@ -422,3 +426,242 @@ def test_rule_based_analyzer_still_works_with_openai_env(monkeypatch):
     result = RuleBasedAnalyzer().analyze(context)
     _assert_ai_structure(result)
     assert result["analysis_source"] == "rule_based"
+
+
+# ──────────────────────────── Stage 20C：LocalWaterAnalyzer ────────────────────────────
+
+
+def _local_context(stations, trends=None, rainfall=None, forecasts=None, alerts=None):
+    return AIAnalysisContext(
+        hours=24,
+        stations=stations,
+        trends=trends or {},
+        rainfall_trends=rainfall or {},
+        forecasts=forecasts or {},
+        alerts=alerts or [],
+        alert_summary={},
+    )
+
+
+def test_local_analyzer_selected_with_env(monkeypatch):
+    monkeypatch.setenv("AI_ANALYZER", "local")
+    assert isinstance(get_ai_analyzer(), LocalWaterAnalyzer)
+
+
+def test_local_analysis_returns_200_and_structure(monkeypatch):
+    monkeypatch.setenv("AI_ANALYZER", "local")
+    _reset_alerts()
+    _set_all_normal()
+    resp = client.get("/api/ai-analysis")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["analysis_source"] == "local_intelligence"
+    _assert_ai_structure(data)
+    assert data["report"]
+
+
+def test_local_empty_data_no_500(monkeypatch):
+    monkeypatch.setenv("AI_ANALYZER", "local")
+    data = LocalWaterAnalyzer().analyze(AIAnalysisContext())
+    _assert_ai_structure(data)
+    assert data["risk_level"] == "normal"
+    assert "足够" in data["summary"]
+
+
+def test_local_high_water_keeps_authoritative_risk(monkeypatch):
+    monkeypatch.setenv("AI_ANALYZER", "local")
+    _reset_alerts()
+    _set_all_normal()
+    _latest_water("ST001", 5.2, 0.0)  # 警戒 5.0，达警戒
+    data = client.get("/api/ai-analysis").json()
+    assert data["risk_level"] in ("warning", "severe")
+    assert data["risk_score"] >= 72
+    assert any(s["station_id"] == "ST001" for s in data["abnormal_stations"])
+    rule = RuleBasedAnalyzer().analyze(build_analysis_context(hours=24))
+    assert data["risk_level"] == rule["risk_level"]
+    assert data["risk_score"] == rule["risk_score"]
+
+
+def test_local_strong_rain_flags_station(monkeypatch):
+    monkeypatch.setenv("AI_ANALYZER", "local")
+    _reset_alerts()
+    _set_all_normal()
+    _latest_water("ST003", 2.5, 60.0)
+    data = client.get("/api/ai-analysis").json()
+    assert any(a["station_id"] == "ST003" for a in data["abnormal_stations"])
+    assert data["rainfall_analysis"]["total_all"] >= 50
+    assert any(
+        i["station_id"] == "ST003" and i["total_rainfall"] >= 50
+        for i in data["rainfall_analysis"]["stations"]
+    )
+
+
+def test_local_report_reflects_real_numbers():
+    ctx = _local_context(
+        stations=[
+            StationSnapshot(
+                station_id="ST001", station_name="都江堰水文站",
+                water_level=4.61, warning_level=5.0, rainfall=3.2,
+                status="注意", source="mock", data_quality="valid",
+            ),
+        ],
+        trends={"ST001": TrendSnapshot(
+            direction="rising", slope=0.03, change=0.18,
+            recent_values=[4.4, 4.5, 4.61], window_hours=24,
+        )},
+        rainfall={"ST001": {"total": 23.5, "direction": "rising", "recent_values": [1, 2, 3]}},
+        forecasts={"ST001": {
+            "sufficient": True, "predicted_water_level": 4.78,
+            "trend": "rising", "risk_level": "attention",
+            "horizon_hours": 6, "current_water_level": 4.61,
+        }},
+    )
+    data = LocalWaterAnalyzer().analyze(ctx)
+    _assert_ai_structure(data)
+    assert "4.61" in data["report"]
+    assert "5.00" in data["report"]
+    assert "23.5" in data["report"]
+    assert data["risk_reasons"]
+    assert data["future_outlook"]
+    assert data["key_findings"]
+
+
+def test_local_report_changes_with_data_and_deterministic():
+    ctx1 = _local_context(
+        stations=[StationSnapshot(
+            station_id="ST001", station_name="都江堰水文站",
+            water_level=4.61, warning_level=5.0, rainfall=3.2,
+            status="注意", source="mock", data_quality="valid",
+        )],
+        trends={"ST001": TrendSnapshot(
+            direction="rising", slope=0.03, change=0.18,
+            recent_values=[4.4, 4.5, 4.61], window_hours=24,
+        )},
+        rainfall={"ST001": {"total": 23.5, "direction": "rising", "recent_values": [1, 2, 3]}},
+        forecasts={"ST001": {
+            "sufficient": True, "predicted_water_level": 4.78,
+            "trend": "rising", "risk_level": "attention",
+            "horizon_hours": 6, "current_water_level": 4.61,
+        }},
+    )
+    ctx2 = _local_context(
+        stations=[StationSnapshot(
+            station_id="ST001", station_name="都江堰水文站",
+            water_level=2.5, warning_level=5.0, rainfall=0.0,
+            status="正常", source="mock", data_quality="valid",
+        )],
+        trends={"ST001": TrendSnapshot(
+            direction="falling", slope=-0.05, change=-0.3,
+            recent_values=[2.8, 2.6, 2.5], window_hours=24,
+        )},
+        rainfall={"ST001": {"total": 0.0, "direction": "none", "recent_values": []}},
+    )
+    r1a = LocalWaterAnalyzer().analyze(ctx1)
+    r1b = LocalWaterAnalyzer().analyze(ctx1)
+    r2 = LocalWaterAnalyzer().analyze(ctx2)
+    assert r1a["report"] == r1b["report"], "同一数据必须生成相同文案（确定性）"
+    assert r1a["report"] != r2["report"], "数据变化后分析结果应随之变化"
+    assert "上涨" in r1a["report"]
+    assert "下降" in r2["report"]
+
+
+def test_local_fallback_to_rule_on_exception(monkeypatch):
+    monkeypatch.setenv("AI_ANALYZER", "local")
+    _reset_alerts()
+    _set_all_normal()
+
+    def boom(self, context):
+        raise RuntimeError("local analyzer crashed")
+
+    monkeypatch.setattr(ai_service.LocalWaterAnalyzer, "analyze", boom)
+    data = client.get("/api/ai-analysis").json()
+    assert data["analysis_source"] == "rule_based"
+    assert "规则分析结果" in data["note"]
+    _assert_ai_structure(data)
+
+
+def test_local_does_not_degrade_severe():
+    ctx = _local_context(
+        stations=[StationSnapshot(
+            station_id="ST001", station_name="都江堰水文站",
+            water_level=6.2, warning_level=5.0, rainfall=0.0,
+            status="超警", source="mock", data_quality="valid",
+        )],
+    )
+    data = LocalWaterAnalyzer().analyze(ctx)
+    assert data["risk_level"] == "severe"
+    assert data["risk_score"] >= 95
+    assert "超警" in data["report"]
+
+
+def test_local_multi_station_abnormal_detected():
+    stations = [
+        StationSnapshot(
+            station_id="ST001", station_name="都江堰水文站",
+            water_level=6.2, warning_level=5.0, rainfall=0.0,
+            status="超警", source="mock", data_quality="valid",
+        ),
+        StationSnapshot(
+            station_id="ST002", station_name="望江楼水文站",
+            water_level=4.4, warning_level=5.0, rainfall=0.0,
+            status="注意", source="mock", data_quality="valid",
+        ),
+    ]
+    data = LocalWaterAnalyzer().analyze(_local_context(stations=stations))
+    ids = {s["station_id"] for s in data["abnormal_stations"]}
+    assert ids == {"ST001", "ST002"}
+    assert any("都江堰" in r for r in data["risk_reasons"])
+
+
+def test_local_rising_and_falling_trends_reflected():
+    base = StationSnapshot(
+        station_id="ST001", station_name="都江堰水文站",
+        water_level=4.5, warning_level=5.0, rainfall=0.0,
+        status="注意", source="mock", data_quality="valid",
+    )
+    rising = _local_context(
+        stations=[base],
+        trends={"ST001": TrendSnapshot(
+            direction="rising", slope=0.05, change=0.2,
+            recent_values=[4.3, 4.4, 4.5], window_hours=24,
+        )},
+    )
+    falling = _local_context(
+        stations=[base],
+        trends={"ST001": TrendSnapshot(
+            direction="falling", slope=-0.05, change=-0.2,
+            recent_values=[4.7, 4.6, 4.5], window_hours=24,
+        )},
+    )
+    d1 = LocalWaterAnalyzer().analyze(rising)
+    d2 = LocalWaterAnalyzer().analyze(falling)
+    assert d1["trend_analysis"]["stations"][0]["direction"] == "rising"
+    assert d2["trend_analysis"]["stations"][0]["direction"] == "falling"
+    assert "上涨" in d1["trend_analysis"]["stations"][0]["description"]
+    assert "下降" in d2["trend_analysis"]["stations"][0]["description"]
+
+
+def test_local_no_history_data_reports_insufficient():
+    ctx = _local_context(
+        stations=[StationSnapshot(
+            station_id="ST001", station_name="都江堰水文站",
+            water_level=4.5, warning_level=5.0, rainfall=0.0,
+            status="注意", source="mock", data_quality="valid",
+        )],
+    )
+    data = LocalWaterAnalyzer().analyze(ctx)
+    _assert_ai_structure(data)
+    assert data["future_outlook"] == "历史数据不足，暂无法提供未来趋势预判。"
+    assert data["trend_analysis"]["stations"][0]["direction"] == "insufficient"
+
+
+def test_rule_and_openai_unaffected_by_local_source(monkeypatch):
+    assert isinstance(get_ai_analyzer(), RuleBasedAnalyzer)
+    monkeypatch.setenv("AI_ANALYZER", "openai")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    _reset_alerts()
+    _set_all_normal()
+    data = client.get("/api/ai-analysis").json()
+    assert data["analysis_source"] == "rule_based"
+    assert "真实 AI 分析暂不可用" in data["note"]
+    reset_ai_analysis_cache()

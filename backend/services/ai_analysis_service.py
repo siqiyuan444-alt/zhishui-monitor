@@ -4,6 +4,10 @@
 - BaseAIAnalyzer 统一分析器接口，前端与 main.py 只依赖该接口；
 - RuleBasedAnalyzer：复用现有水利规则 calculate_status() 的规则分析，
   analysis_source = "rule_based"，作为默认与降级方案；
+- LocalWaterAnalyzer：零 API 费用本地智能分析（Stage 20C），
+  analysis_source = "local_intelligence"，通过环境变量 AI_ANALYZER=local 启用，
+  完全离线运行、绝不调用任何外部 AI / 收费服务；复用系统真实趋势/统计/预测/
+  风险/预警结果动态生成中文分析，风险等级严格采纳规则权威结论，绝不降低；
 - OpenAIAnalyzer：真实 AI 模型分析（Stage 20B），analysis_source = "ai_model"，
   通过环境变量 AI_ANALYZER=openai 启用，失败时由 generate_ai_analysis() 自动
   降级为 RuleBasedAnalyzer，绝不因 AI 失败导致水情监测系统不可用。
@@ -42,14 +46,14 @@ from database import (
     get_alerts,
     get_alert_summary,
 )
-from services.data_analysis import build_comparison
+from services.data_analysis import build_comparison, forecast
 from services.mock_water_provider import calculate_status
 
 logger = logging.getLogger("water_monitor.ai_analysis")
 
 # 合法的 AI 风险等级 / 分析来源取值
 RISK_LEVELS = ("normal", "attention", "warning", "severe")
-ANALYSIS_SOURCES = ("rule_based", "ai_model")
+ANALYSIS_SOURCES = ("rule_based", "ai_model", "local_intelligence")
 RISK_ORDER = {"normal": 0, "attention": 1, "warning": 2, "severe": 3}
 
 # 真实 AI 调用默认配置（环境变量同名覆盖；仅为可选功能，不配置不影响系统运行）
@@ -151,6 +155,8 @@ class AIAnalysisContext:
     alerts: list = field(default_factory=list)            # list[AlertSnapshot]
     alert_summary: dict = field(default_factory=dict)
     risk_ranking: list = field(default_factory=list)
+    rainfall_trends: dict = field(default_factory=dict)   # {station_id: {total,direction,recent_values}}
+    forecasts: dict = field(default_factory=dict)         # {station_id: forecast_dict}
 
 
 # ──────────────────────────── AI 输出模型 ────────────────────────────
@@ -158,7 +164,12 @@ class AIAnalysisContext:
 
 @dataclass
 class AIAnalysisOutput:
-    """结构化 AI 分析输出。所有字段必填，JSON 可序列化。"""
+    """结构化 AI 分析输出。所有字段必填，JSON 可序列化。
+
+    扩展字段（water_overview / rainfall_analysis / risk_reasons /
+    future_outlook / report）仅为 LocalWaterAnalyzer 可选提供，
+    空值时不出现在响应中，不影响既有 rule_based / ai_model 输出结构。
+    """
 
     risk_level: str
     risk_score: int
@@ -171,6 +182,11 @@ class AIAnalysisOutput:
     analysis_source: str
     note: str = ""
     model_name: str = ""
+    water_overview: str = ""
+    rainfall_analysis: dict = field(default_factory=dict)
+    risk_reasons: list = field(default_factory=list)
+    future_outlook: str = ""
+    report: str = ""
 
     def to_dict(self) -> dict:
         data = {
@@ -187,6 +203,16 @@ class AIAnalysisOutput:
         }
         if self.model_name:
             data["model_name"] = self.model_name
+        if self.water_overview:
+            data["water_overview"] = self.water_overview
+        if self.rainfall_analysis:
+            data["rainfall_analysis"] = dict(self.rainfall_analysis)
+        if self.risk_reasons:
+            data["risk_reasons"] = list(self.risk_reasons)
+        if self.future_outlook:
+            data["future_outlook"] = self.future_outlook
+        if self.report:
+            data["report"] = self.report
         return data
 
 
@@ -744,6 +770,421 @@ def _apply_safety_correction(context: AIAnalysisContext, data: dict) -> dict:
     return data
 
 
+# ──────────────────────────── LocalWaterAnalyzer（零费用本地智能分析） ────────────────────────────
+
+# 本地分析固定的预测展望窗口小时数（与系统 forecast 默认一致）
+LOCAL_HORIZON_HOURS = 6
+# 降雨强度档阈值（mm，统计窗口合计）
+RAIN_STRONG_THRESHOLD = 15.0
+RAIN_HEAVY_THRESHOLD = 50.0
+
+LOCAL_RISK_CN = {"normal": "正常", "attention": "注意", "warning": "警戒", "severe": "超警"}
+LOCAL_TREND_CN = {"rising": "上涨", "falling": "下降", "stable": "平稳", "insufficient": "数据不足"}
+
+
+def _pick_variant(variants: list, seed) -> str:
+    """从语义等价的句子池中按数据派生种子选取一句（确定性、非随机）。"""
+    if not variants:
+        return ""
+    return variants[abs(int(seed)) % len(variants)]
+
+
+def _rain_level_text(total: float) -> str:
+    if total < 0.5:
+        return "基本无降雨"
+    if total < 5:
+        return "小雨"
+    if total < 15:
+        return "中雨"
+    if total < 50:
+        return "较强降雨"
+    return "强降雨"
+
+
+def _rain_direction_text(direction: str) -> str:
+    return {
+        "rising": "降雨在增强",
+        "falling": "降雨在减弱",
+        "stable": "降雨总体平稳",
+        "none": "基本无降雨",
+        "insufficient": "降雨数据不足",
+    }.get(direction, "降雨数据不足")
+
+
+def _rainfall_trend_for(records: list) -> dict:
+    """按时间序列切前/后两段比较均值，判定降雨强弱趋势（纯阈值、确定性）。"""
+    rains = [max(0.0, _to_float(r.get("rainfall"))) for r in (records or [])]
+    total = round(sum(rains), 1)
+    direction = "insufficient"
+    if len(rains) < 3:
+        direction = "insufficient" if total > 0 else "none"
+    elif total <= 0.0:
+        direction = "none"
+    else:
+        half = len(rains) // 2
+        first = rains[:half]
+        second = rains[half:]
+        f_mean = sum(first) / len(first)
+        s_mean = sum(second) / len(second)
+        if s_mean >= f_mean * 1.2 and s_mean >= 0.2:
+            direction = "rising"
+        elif f_mean >= s_mean * 1.2 and f_mean >= 0.2:
+            direction = "falling"
+        else:
+            direction = "stable"
+    return {"total": total, "direction": direction, "recent_values": rains[-12:]}
+
+
+class LocalWaterAnalyzer(BaseAIAnalyzer):
+    """零 API 费用的本地智能水情分析器（Stage 20C）。
+
+    - 完全不调用 OpenAI 或任何收费云端 AI，默认离线可用；
+    - 输入全部来自系统已有真实计算结果：当前水位、警戒水位、水位差与比值、
+      变化斜率、降雨量与降雨趋势、历史统计、system 风险等级、forecast 预测、
+      未解除预警；绝不随机生成、绝不冒充外部大模型；
+    - risk_level / risk_score 直接采纳 RuleBasedAnalyzer 的权威聚合结论
+      （系统 calculate_status），本地分析只撰写更丰富的动态中文解释，
+      结构上保证不会降低权威风险等级；
+    - 文本由“事实单元 + 确定性变体池”组合生成：同一数据恒产出同一文案，
+      数据变化文案随之变化，不机械重复；
+    - 任何内部异常由 generate_ai_analysis() 统一降级为 RuleBasedAnalyzer。
+    """
+
+    analysis_source = "local_intelligence"
+
+    def analyze(self, context: AIAnalysisContext) -> dict:
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        hours = int(context.hours or 24)
+        stations = context.stations or []
+        if not stations:
+            return AIAnalysisOutput(
+                risk_level="normal",
+                risk_score=0,
+                summary="当前缺少足够的水情数据，暂无法生成智能分析。",
+                key_findings=["暂无足够的站点水情数据"],
+                trend_analysis={"overall": "暂无足够数据", "stations": []},
+                abnormal_stations=[],
+                recommendations=["请稍后重试，待系统采集到有效数据后再生成分析。"],
+                generated_at=now_iso,
+                analysis_source=self.analysis_source,
+                note=_mock_data_disclaimer(context),
+            ).to_dict()
+
+        # 权威风险结论：与系统规则完全一致，本地分析绝不降低
+        authoritative = RuleBasedAnalyzer().analyze(context)
+        risk_level = authoritative["risk_level"]
+        risk_score = int(authoritative["risk_score"])
+
+        sites = self._build_sites(context)
+
+        overview = self._overview(sites)
+        water_trends = self._water_trends(context, sites, hours)
+        rain_analysis = self._rain_analysis(sites)
+        key_findings = self._key_findings(context, sites, authoritative, rain_analysis)
+        reasons = self._risk_reasons(context, sites, authoritative)
+        future = self._future_outlook(sites)
+        recommendations = self._recommendations(context, sites, authoritative, rain_analysis)
+        report = self._report(sites, rain_analysis, authoritative, future, hours)
+
+        return AIAnalysisOutput(
+            risk_level=risk_level,
+            risk_score=risk_score,
+            summary=overview,
+            water_overview=overview,
+            key_findings=key_findings,
+            trend_analysis={
+                "overall": water_trends["overall"],
+                "stations": water_trends["stations"],
+            },
+            abnormal_stations=authoritative["abnormal_stations"],
+            recommendations=recommendations,
+            rainfall_analysis=rain_analysis,
+            risk_reasons=reasons,
+            future_outlook=future,
+            report=report,
+            generated_at=now_iso,
+            analysis_source=self.analysis_source,
+            note=_mock_data_disclaimer(context),
+        ).to_dict()
+
+    @staticmethod
+    def _build_sites(context: AIAnalysisContext) -> list:
+        sites = []
+        for s in (context.stations or []):
+            wl = _to_float(s.water_level)
+            wlv = _to_float(s.warning_level)
+            rain = _to_float(s.rainfall)
+            try:
+                status = calculate_status(wl, wlv, rain)
+            except Exception:
+                status = (s.status or "正常")
+            risk = STATUS_AI_RISK.get(status, "normal")
+            gap = round(wlv - wl, 2) if wlv > 0 else None
+            ratio = round(wl / wlv, 3) if wlv > 0 else None
+            t = context.trends.get(s.station_id) or TrendSnapshot()
+            rt = (context.rainfall_trends or {}).get(s.station_id) or {
+                "total": round(rain, 1), "direction": "insufficient", "recent_values": [],
+            }
+            sites.append({
+                "station_id": s.station_id,
+                "station_name": s.station_name or s.station_id,
+                "water_level": wl,
+                "warning_level": wlv,
+                "gap": gap,
+                "ratio": ratio,
+                "rainfall": round(rain, 1),
+                "rain_total": float(rt.get("total") or 0.0),
+                "rain_direction": rt.get("direction", "insufficient"),
+                "status": status,
+                "risk_level": risk,
+                "trend": (t.direction if t else "insufficient"),
+                "change": (t.change if t else None),
+                "slope": (t.slope if t else None),
+                "forecast": (context.forecasts or {}).get(s.station_id) or {},
+                "source": s.source or "mock",
+                "data_quality": s.data_quality or "valid",
+            })
+        return sites
+
+    @staticmethod
+    def _overview(sites: list) -> str:
+        counts = {"正常": 0, "注意": 0, "警戒": 0, "超警": 0}
+        for x in sites:
+            counts[x["status"]] = counts.get(x["status"], 0) + 1
+        top = max(sites, key=lambda x: RISK_BASE_SCORE.get(x["risk_level"], 0))
+        seg = (
+            f"共监测 {len(sites)} 个站点：正常 {counts['正常']}、注意 {counts['注意']}、"
+            f"警戒 {counts['警戒']}、超警 {counts['超警']}。"
+        )
+        if top["risk_level"] != "normal":
+            seg += (
+                f"当前风险最高为{top['station_name']}，水位 {top['water_level']:.2f} m"
+                f"（警戒 {top['warning_level']:.2f} m），处于{LOCAL_RISK_CN.get(top['risk_level'], '注意')}状态。"
+            )
+        else:
+            seg += f"当前各站点水位均在正常范围，最高水位 {top['water_level']:.2f} m（{top['station_name']}）。"
+        return seg
+
+    @staticmethod
+    def _water_trends(context: AIAnalysisContext, sites: list, hours: int) -> dict:
+        rise = sum(1 for x in sites if x["trend"] == "rising")
+        fall = sum(1 for x in sites if x["trend"] == "falling")
+        overall = f"过去{hours}小时统计 {len(sites)} 个站点：{rise} 个上涨、{fall} 个下降，其余平稳。"
+        ordered = sorted(sites, key=lambda x: -(abs(x["slope"]) if x["slope"] is not None else 0))
+        stations = [
+            {
+                "station_id": x["station_id"],
+                "station_name": x["station_name"],
+                "direction": x["trend"],
+                "description": RuleBasedAnalyzer._trend_desc(x["trend"], x["change"], x["slope"], hours),
+            }
+            for x in ordered
+        ]
+        return {"overall": overall, "stations": stations}
+
+    @classmethod
+    def _rain_analysis(cls, sites: list) -> dict:
+        items = [
+            {
+                "station_id": x["station_id"],
+                "station_name": x["station_name"],
+                "total_rainfall": round(x["rain_total"], 1),
+                "direction": x["rain_direction"],
+                "level": _rain_level_text(x["rain_total"]),
+            }
+            for x in sites
+        ]
+        total_all = round(sum(i["total_rainfall"] for i in items), 1)
+        if total_all <= 0:
+            overall = "统计窗口内各站点基本无降雨。"
+        else:
+            hi = max(items, key=lambda i: i["total_rainfall"])
+            overall = (
+                f"统计窗口内各站降雨合计 {total_all} mm，其中{hi['station_name']}最多"
+                f"（{hi['total_rainfall']:.1f} mm，{hi['level']}），{_rain_direction_text(hi['direction'])}。"
+            )
+        return {"overall": overall, "stations": items, "total_all": total_all}
+
+    def _key_findings(self, context, sites, authoritative, rain_analysis) -> list:
+        out = list(authoritative.get("key_findings") or [])
+        if rain_analysis.get("total_all", 0) >= RAIN_STRONG_THRESHOLD:
+            hi = max(
+                (i for i in rain_analysis.get("stations", [])),
+                key=lambda i: i["total_rainfall"],
+                default=None,
+            )
+            if hi:
+                out.append(
+                    f"{hi['station_name']}统计窗口降雨合计 {hi['total_rainfall']:.1f} mm（{hi['level']}），"
+                    f"{_rain_direction_text(hi['direction'])}。"
+                )
+        odd = [
+            (x, fn) for x in sites
+            for fn in [x.get("forecast") or {}]
+            if fn.get("sufficient") and fn.get("risk_level") in ("warning", "danger")
+            and x["risk_level"] != "severe"
+        ]
+        seen = set()
+        merged = []
+        for item in out:
+            if item not in seen:
+                seen.add(item)
+                merged.append(item)
+        for x, fn in odd[:2]:
+            text = f"{x['station_name']}若沿当前趋势发展，未来{LOCAL_HORIZON_HOURS}小时可能达到更高风险档。"
+            if text not in seen and len(merged) < 6:
+                seen.add(text)
+                merged.append(text)
+        if not merged:
+            merged.append("无显著异常，各站点水情平稳。")
+        return merged[:6]
+
+    def _risk_reasons(self, context, sites, authoritative) -> list:
+        reasons = []
+        by_id = {x["station_id"]: x for x in sites}
+        for a in (authoritative.get("abnormal_stations") or []):
+            x = by_id.get(a.get("station_id"))
+            if not x:
+                continue
+            ratio = x["ratio"] or 0.0
+            if a.get("risk_level") == "severe" or ratio >= 1.0:
+                reasons.append(
+                    f"{x['station_name']}水位 {x['water_level']:.2f} m 已达/超过警戒 "
+                    f"{x['warning_level']:.2f} m。"
+                )
+            elif a.get("risk_level") == "warning" or ratio >= 0.8:
+                reasons.append(
+                    f"{x['station_name']}水位与警戒水位比值达 {ratio * 100:.0f}%，接近/达到警戒阈值。"
+                )
+            else:
+                reasons.append(
+                    f"{x['station_name']}水情处于注意状态（水位 {x['water_level']:.2f} m / "
+                    f"警戒 {x['warning_level']:.2f} m）。"
+                )
+        risers = [x for x in sites if x["trend"] == "rising"]
+        if risers:
+            fastest = max((x["slope"] or 0.0 for x in risers), default=0.0)
+            names = "、".join(x["station_name"] for x in sorted(risers, key=lambda i: -(i["slope"] or 0))[:3])
+            reasons.append(f"{names}水位呈上升趋势（最快约 {abs(fastest):.3f} 米/小时）。")
+        heavy = [x for x in sites if x["rain_total"] >= RAIN_HEAVY_THRESHOLD]
+        if heavy:
+            names = "、".join(x["station_name"] for x in heavy[:3])
+            reasons.append(f"{names}统计窗口降雨量大（≥50 mm），需防范积水与径流风险。")
+        elif [x for x in sites if x["rain_total"] >= RAIN_STRONG_THRESHOLD]:
+            names = "、".join(
+                x["station_name"] for x in sites
+                if RAIN_STRONG_THRESHOLD <= x["rain_total"] < RAIN_HEAVY_THRESHOLD
+            )
+            reasons.append(f"{names}统计窗口为较强降雨，注意雨水汇聚影响。")
+        alert_count = len(context.alerts or [])
+        if alert_count:
+            reasons.append(f"当前存在 {alert_count} 条待处理/已确认预警，风险尚未解除。")
+        if not reasons:
+            reasons.append("当前各项指标均在正常范围，无显著风险诱因。")
+        return reasons[:8]
+
+    @classmethod
+    def _future_outlook(cls, sites: list) -> str:
+        parts = []
+        for x in sites:
+            fn = x.get("forecast") or {}
+            if not fn.get("sufficient") or fn.get("predicted_water_level") is None:
+                continue
+            pred = float(fn["predicted_water_level"])
+            trend_cn = LOCAL_TREND_CN.get(fn.get("trend"), "平稳")
+            seg = (
+                f"按近期趋势，预计未来{LOCAL_HORIZON_HOURS}小时{x['station_name']}水位约 {pred:.2f} m"
+                f"（当前 {x['water_level']:.2f} m，趋势{trend_cn}）"
+            )
+            if fn.get("risk_level") in ("warning", "danger"):
+                seg += "，或达到更高风险警戒档，需重点防范"
+            elif fn.get("risk_level") == "attention":
+                seg += "，已进入需要关注的区间"
+            seg += "。"
+            parts.append(seg)
+        if not parts:
+            return "历史数据不足，暂无法提供未来趋势预判。"
+        return " ".join(parts[:2]) + "（趋势预测，仅供参考，非真实监测数据）"
+
+    def _recommendations(self, context, sites, authoritative, rain_analysis) -> list:
+        risk = authoritative["risk_level"]
+        recs = []
+        if risk == "severe":
+            recs.append("对超警站点立即启动应急响应，并加密水位及降雨监测频次。")
+        if risk == "warning":
+            recs.append("对达到警戒级别的站点加强监测，提前准备防汛物资。")
+        if risk == "attention":
+            recs.append("对处于注意级别的站点保持持续关注，留意未来水位走向。")
+        risers = [x for x in sites if x["trend"] == "rising"]
+        if risers:
+            names = "、".join(x["station_name"] for x in risers[:3])
+            recs.append(f"持续观察 {names} 的水位上升趋势，关注未来{LOCAL_HORIZON_HOURS}小时是否逼近警戒线。")
+        strong = [x for x in sites if x["rain_total"] >= RAIN_HEAVY_THRESHOLD]
+        if strong:
+            recs.append("强降雨站点注意排涝与径流变化，警惕内涝与山洪风险。")
+        elif rain_analysis.get("total_all", 0) >= RAIN_STRONG_THRESHOLD:
+            recs.append("较强降雨条件下注意雨水汇集对水位的影响。")
+        if len(context.alerts or []):
+            recs.append("尽快核实并处置未处理预警，避免风险累积。")
+        if not recs:
+            recs.append("维持常规监测频率，继续关注水位与降雨变化。")
+        return recs[:8]
+
+    def _report(self, sites, rain_analysis, authoritative, future, hours) -> str:
+        risk = authoritative["risk_level"]
+        top = max(sites, key=lambda x: RISK_BASE_SCORE.get(x["risk_level"], 0))
+        trend_cn = LOCAL_TREND_CN.get(top["trend"], "平稳")
+        seed = int(
+            abs(top["water_level"] * 100)
+            + abs((top["slope"] or 0.0) * 1000)
+            + top["rain_total"] * 10
+        )
+        parts = []
+        if top["risk_level"] != "normal":
+            opener = _pick_variant([
+                f"过去{hours}小时，{top['station_name']}水位{trend_cn}",
+                f"近期，{top['station_name']}水位{trend_cn}",
+                f"过去{hours}小时观测到{top['station_name']}水位{trend_cn}",
+            ], seed)
+            parts.append(
+                f"{opener}，当前水位 {top['water_level']:.2f} m，警戒水位 {top['warning_level']:.2f} m，"
+                f"处于{LOCAL_RISK_CN.get(top['risk_level'], '注意')}状态。"
+            )
+            if top["gap"] is not None:
+                if top["gap"] >= 0:
+                    relevant = _pick_variant([
+                        f"目前距警戒水位仅 {top['gap']:.2f} m",
+                        f"当前距离警戒线 {top['gap']:.2f} m",
+                    ], seed)
+                    parts.append(f"{relevant}，需要密切关注。")
+                else:
+                    parts.append(f"当前已超警戒水位 {abs(top['gap']):.2f} m，形势严峻。")
+        else:
+            if top["gap"] is not None:
+                parts.append(
+                    f"过去{hours}小时，{top['station_name']}等站点水位总体{trend_cn}，"
+                    f"当前低于警戒水位 {top['gap']:.2f} m。"
+                )
+            else:
+                parts.append(f"过去{hours}小时，{top['station_name']}等站点水位总体{trend_cn}。")
+        if rain_analysis.get("total_all", 0) >= RAIN_STRONG_THRESHOLD:
+            hi = max(rain_analysis.get("stations", []), key=lambda i: i["total_rainfall"], default=None)
+            if hi:
+                parts.append(
+                    f"同期各站降雨合计 {rain_analysis['total_all']:.1f} mm，"
+                    f"其中{hi['station_name']}为{hi['level']}，{_rain_direction_text(hi['direction'])}。"
+                )
+        parts.append(f"综合系统风险判定，当前整体处于{LOCAL_RISK_CN.get(risk, '正常')}级别（评分 {authoritative['risk_score']}/100）。")
+        abnormal = (authoritative.get("abnormal_stations") or [])
+        if abnormal:
+            names = "、".join(x.get("station_name") for x in abnormal[:3])
+            parts.append(f"需重点关注站点：{names}。")
+        if future and future != "历史数据不足，暂无法提供未来趋势预判。":
+            parts.append(future.rstrip("。") + "。")
+        parts.append("建议持续关注未来1～3小时的水位与降雨变化，并根据风险等级及时响应。")
+        return " ".join(parts)
+
+
 # ──────────────────────────── 分析器工厂 ────────────────────────────
 
 
@@ -752,11 +1193,15 @@ def get_ai_analyzer(name: str = None) -> BaseAIAnalyzer:
 
     未指定时读取环境变量 AI_ANALYZER（默认 rule_based）。
     - rule_based：默认规则分析，不调用任何外部 API；
+    - local：LocalWaterAnalyzer 本地智能分析，零 API 费用、完全离线，
+      失败自动降级 rule_based；
     - openai：OpenAI 兼容真实 AI 分析器（需配置 OPENAI_API_KEY，失败自动降级）。
     """
     analyzer_name = (name or os.environ.get("AI_ANALYZER", "rule_based")).strip().lower()
     if analyzer_name in ("rule_based", "rule", "规则"):
         return RuleBasedAnalyzer()
+    if analyzer_name in ("local", "local_intelligence", "本地", "local_ai"):
+        return LocalWaterAnalyzer()
     if analyzer_name in ("openai", "gpt", "chatgpt", "ai_model"):
         return OpenAIAnalyzer()
     raise AIAnalysisError(f"未知的 AI 分析器配置: {analyzer_name}")
@@ -799,6 +1244,8 @@ def build_analysis_context(hours: int = 24) -> AIAnalysisContext:
     snapshots: list = []
     trends: dict = {}
     statistics: dict = {}
+    rainfall_trends: dict = {}
+    forecasts: dict = {}
     for s in stations:
         sid = s["station_id"]
         rec = latest_by_id.get(sid)
@@ -829,6 +1276,13 @@ def build_analysis_context(hours: int = 24) -> AIAnalysisContext:
             average=comp.get("average_water_level"),
             change=comp.get("water_level_change"),
         )
+        rainfall_trends[sid] = _rainfall_trend_for(hist_by_station.get(sid, []))
+        forecasts[sid] = forecast(
+            hist_by_station.get(sid, []),
+            warning_level=_to_float(s.get("warning_level")),
+            hours=hours,
+            horizon_hours=LOCAL_HORIZON_HOURS,
+        )
 
     return AIAnalysisContext(
         hours=hours,
@@ -838,6 +1292,8 @@ def build_analysis_context(hours: int = 24) -> AIAnalysisContext:
         alerts=alerts,
         alert_summary=alert_summary,
         risk_ranking=comparison["risk_ranking"],
+        rainfall_trends=rainfall_trends,
+        forecasts=forecasts,
     )
 
 
@@ -845,6 +1301,8 @@ def generate_ai_analysis(hours: int = 24) -> dict:
     """读取当前系统水情数据 → 调用所选分析器 → 返回结构化结果（不写库）。
 
     - 默认 rule_based，不产生任何外部 AI API 调用；
+    - AI_ANALYZER=local 时使用 LocalWaterAnalyzer 本地智能分析（离线、零费用），
+      任何失败自动降级 RuleBasedAnalyzer；
     - AI_ANALYZER=openai 时调用真实模型；任何失败自动降级 RuleBasedAnalyzer，
       并在 note 中说明“真实 AI 分析暂不可用，当前使用规则分析结果”；
     - 仅对真实模型成功结果做短时缓存（AI_ANALYSIS_CACHE_SECONDS 秒，默认 60），
@@ -868,7 +1326,10 @@ def generate_ai_analysis(hours: int = 24) -> dict:
         logger.warning("AI 模型分析失败，已降级为规则分析：%s", reason)
         rule_result = RuleBasedAnalyzer().analyze(context)
         rule = rule_result.to_dict() if isinstance(rule_result, AIAnalysisOutput) else rule_result
-        fallback_note = "真实 AI 分析暂不可用，当前使用规则分析结果。"
+        if analyzer.analysis_source == "local_intelligence":
+            fallback_note = "本地智能分析暂不可用，当前使用规则分析结果。"
+        else:
+            fallback_note = "真实 AI 分析暂不可用，当前使用规则分析结果。"
         note = str(rule.get("note") or "")
         rule["note"] = (fallback_note + " " + note) if note else fallback_note
         data = rule

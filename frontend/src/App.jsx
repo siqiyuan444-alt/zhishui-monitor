@@ -158,6 +158,12 @@ function aiRiskClass(level) {
   return AI_RISK_CLASS[level] || 'ai-risk-normal'
 }
 
+function aiSourceLabel(source) {
+  if (source === 'ai_model') return 'AI 模型分析'
+  if (source === 'local_intelligence') return '本地智能分析'
+  return '规则分析（AI 暂不可用）'
+}
+
 function waterCompareOption(data, range) {
   const is7d = range === '168h'
   return {
@@ -1750,13 +1756,9 @@ function MonitorApp({ user, token, onLogout }) {
         <section className="ai-analysis-section" id="ai" aria-label="AI 智能水情分析">
           <div className="ai-header">
             <h2>AI 智能水情分析</h2>
-            <span className={`ai-source-tag ${aiAnalysis && aiAnalysis.analysis_source === 'ai_model' ? 'is-ai' : 'is-rule'}`}>
+            <span className={`ai-source-tag ${aiAnalysis && aiAnalysis.analysis_source === 'ai_model' ? 'is-ai' : aiAnalysis && aiAnalysis.analysis_source === 'local_intelligence' ? 'is-local' : 'is-rule'}`}>
               分析来源：
-              {aiAnalysis
-                ? aiAnalysis.analysis_source === 'ai_model'
-                  ? 'AI 模型分析'
-                  : '规则分析（AI 暂不可用）'
-                : '规则分析（暂未接入外部 AI 模型）'}
+              {aiAnalysis ? aiSourceLabel(aiAnalysis.analysis_source) : '规则分析（暂未接入外部 AI 模型）'}
             </span>
           </div>
           <div className="ai-actions">
@@ -1793,7 +1795,7 @@ function MonitorApp({ user, token, onLogout }) {
                   {aiAnalysis.analysis_source && (
                     <p className="ai-source-note">
                       分析来源：
-                      {aiAnalysis.analysis_source === 'ai_model' ? 'AI 模型分析' : '规则分析（AI 暂不可用）'}
+                      {aiSourceLabel(aiAnalysis.analysis_source)}
                       {aiAnalysis.model_name ? `　模型：${aiAnalysis.model_name}` : ''}
                       {aiAnalysis.generated_at ? `　生成时间：${formatUpdateTime(aiAnalysis.generated_at)}` : ''}
                     </p>
@@ -1801,6 +1803,13 @@ function MonitorApp({ user, token, onLogout }) {
                   {aiAnalysis.note && <p className="ai-note">{aiAnalysis.note}</p>}
                 </div>
               </div>
+
+              {aiAnalysis.report && (
+                <div className="ai-report-box">
+                  <h3>综合分析报告</h3>
+                  <p>{aiAnalysis.report}</p>
+                </div>
+              )}
 
               <div className="ai-grid">
                 <div className="ai-block">
@@ -1859,6 +1868,44 @@ function MonitorApp({ user, token, onLogout }) {
                     </ul>
                   ) : (
                     <p className="ai-empty">暂无建议</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="ai-grid">
+                <div className="ai-block">
+                  <h3>风险原因</h3>
+                  {(Array.isArray(aiAnalysis.risk_reasons) ? aiAnalysis.risk_reasons : []).length > 0 ? (
+                    <ul className="ai-list">
+                      {aiAnalysis.risk_reasons.map((r, i) => (
+                        <li key={i}>{r}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="ai-empty">暂无风险原因说明</p>
+                  )}
+                </div>
+                <div className="ai-block">
+                  <h3>未来展望</h3>
+                  {aiAnalysis.future_outlook ? (
+                    <p className="ai-future-outlook">{aiAnalysis.future_outlook}</p>
+                  ) : (
+                    <p className="ai-empty">暂无趋势预测</p>
+                  )}
+                  {aiAnalysis.rainfall_analysis && aiAnalysis.rainfall_analysis.overall && (
+                    <p className="ai-rain-overall">{aiAnalysis.rainfall_analysis.overall}</p>
+                  )}
+                  {(Array.isArray(aiAnalysis.rainfall_analysis && aiAnalysis.rainfall_analysis.stations)
+                    ? aiAnalysis.rainfall_analysis.stations
+                    : []
+                  ).length > 0 && (
+                    <ul className="ai-list ai-rain-stations">
+                      {aiAnalysis.rainfall_analysis.stations.slice(0, 5).map((r, i) => (
+                        <li key={r.station_id || i}>
+                          {r.station_name}：{r.total_rainfall} mm（{r.level}）
+                        </li>
+                      ))}
+                    </ul>
                   )}
                 </div>
               </div>
