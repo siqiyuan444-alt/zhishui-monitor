@@ -4114,3 +4114,732 @@ h1 {
     padding: 20px 16px;
   }
 }
+
+/* ══════════════════════════════════════════════════════════════
+   Stage 25 · Phase 1：首页水情监测工作台
+   仅视觉与布局：不改变任何数据来源、接口、图表数据与交互逻辑
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── 页面骨架：取消整页大卡片，改为「留白 + 分区 + 细分隔线」 ── */
+.monitor-page {
+  min-height: 100vh;
+  padding: 0;
+  background: var(--c-bg);
+}
+
+.monitor-panel {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 0 40px 72px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* 统一的区块节奏：留白替代多余卡片阴影 */
+.workbench,
+.trend-region,
+.ai-analysis-section,
+.latest-alerts,
+.overall-status,
+.overview-section,
+.data-cards,
+.warning-panel,
+.warning-center,
+.rainfall-section,
+.history-analysis-section,
+.comparison-section,
+.report-section,
+.alert-center {
+  margin-bottom: 56px;
+}
+
+/* ── 第一层：系统 Header ── */
+.page-header {
+  margin-bottom: 0;
+  padding: 28px 0 0;
+  border-bottom: 0;
+}
+
+.header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: var(--r-md);
+  background: var(--c-primary);
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.brand-text .system-label {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 2px;
+}
+
+.brand-sub {
+  margin: 3px 0 0;
+  color: var(--c-text-2);
+  font-size: 13px;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.system-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  background: var(--c-card);
+  color: var(--c-text-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--c-text-3);
+}
+
+.system-status.is-ok {
+  background: var(--st-normal-soft);
+  border-color: #bde2ca;
+  color: var(--st-normal);
+}
+
+.system-status.is-ok .status-dot {
+  background: var(--st-normal);
+}
+
+.system-status.is-syncing {
+  background: var(--st-attention-soft);
+  border-color: #ead9a6;
+  color: var(--st-attention);
+}
+
+.system-status.is-syncing .status-dot {
+  background: var(--st-attention);
+}
+
+.system-status.is-error {
+  background: var(--st-danger-soft);
+  border-color: #f3c9c9;
+  color: var(--st-danger);
+}
+
+.system-status.is-error .status-dot {
+  background: var(--st-danger);
+}
+
+.header-entry-btn {
+  padding: 7px 14px;
+  border: 1px solid var(--c-primary-soft-strong);
+  border-radius: var(--r-md);
+  background: var(--c-primary-soft);
+  color: var(--c-primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.header-entry-btn:hover {
+  background: var(--c-primary);
+  border-color: var(--c-primary);
+  color: #ffffff;
+}
+
+/* ── 导航：主导航 5 项 + 次级锚点，原有锚点与行为全部保留 ── */
+.top-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin: 24px 0 0;
+  padding: 0 0 14px;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--c-border);
+  border-radius: 0;
+  box-shadow: none;
+  overflow: visible;
+}
+
+.top-nav-main,
+.top-nav-more {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.top-nav button {
+  margin: 0;
+  padding: 8px 16px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  font-size: 15px;
+}
+
+.top-nav button.active::after {
+  content: none;
+}
+
+.top-nav-main button {
+  color: var(--c-text);
+  font-weight: 700;
+}
+
+.top-nav-more {
+  gap: 2px;
+  padding-left: 16px;
+  border-left: 1px solid var(--c-border);
+}
+
+.top-nav-more button {
+  padding: 6px 11px;
+  color: var(--c-text-3);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.top-nav-more button:hover:not(.active) {
+  background: var(--c-subtle);
+  color: var(--c-primary);
+}
+
+.top-nav button.active {
+  background: var(--c-primary-soft);
+  color: var(--c-primary);
+}
+
+.top-nav-main button.active {
+  font-weight: 700;
+}
+
+/* ── 第二层：Hero / 系统概览 ── */
+.hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 32px;
+  flex-wrap: wrap;
+  padding: 44px 0 34px;
+}
+
+.hero-title {
+  margin: 0;
+  color: var(--c-text);
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+
+.hero-sub {
+  margin: 10px 0 0;
+  color: var(--c-text-2);
+  font-size: 15px;
+}
+
+.hero-meta {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  flex-wrap: wrap;
+}
+
+.hero-meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--c-text-3);
+  font-size: 13px;
+}
+
+.hero-meta-item strong {
+  color: var(--c-text);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.hero-status.is-ok {
+  color: var(--st-normal);
+}
+
+.hero-status.is-syncing {
+  color: var(--st-attention);
+}
+
+.hero-status.is-error {
+  color: var(--st-danger);
+}
+
+.hero-status.is-ok .status-dot {
+  background: var(--st-normal);
+}
+
+.hero-status.is-syncing .status-dot {
+  background: var(--st-attention);
+}
+
+.hero-status.is-error .status-dot {
+  background: var(--st-danger);
+}
+
+/* 工具条：数据来源说明 + 站点选择 */
+.demo-banner {
+  margin-bottom: 12px;
+}
+
+.station-selector {
+  margin-bottom: 32px;
+}
+
+/* ── 第三层：核心监测工作台（地图 65% / 实时水情 35%） ── */
+.workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1.9fr) minmax(300px, 1fr);
+  gap: 28px;
+  align-items: start;
+}
+
+.workbench-map {
+  min-width: 0;
+}
+
+.workbench-map .map-section {
+  margin: 0;
+  padding: 24px 26px 26px;
+  background: var(--c-card);
+  border: 1px solid var(--c-border);
+  border-top: 1px solid var(--c-border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--sh-sm);
+}
+
+.workbench-map .map-section h2 {
+  margin: 0 0 4px;
+  font-size: 20px;
+}
+
+.workbench-map .map-sub {
+  margin: 0 0 16px;
+}
+
+.workbench-map .station-map {
+  height: 460px;
+}
+
+/* 实时水情摘要：用 hairline 分隔，不再是四张大 KPI 卡 */
+.live-summary {
+  background: var(--c-card);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--sh-sm);
+  padding: 24px 26px 20px;
+}
+
+.live-summary-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.live-summary-head h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.live-summary-sub {
+  color: var(--c-text-3);
+  font-size: 12px;
+}
+
+.live-metrics {
+  margin: 0;
+}
+
+.live-metric {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 4px 12px;
+  padding: 15px 0;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.live-metric:last-child {
+  border-bottom: 0;
+}
+
+.live-metric dt {
+  color: var(--c-text-2);
+  font-size: 13px;
+}
+
+.live-metric dd {
+  margin: 0;
+  color: var(--c-text);
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.live-metric dd small {
+  margin-left: 4px;
+  color: var(--c-text-3);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.live-metric-note {
+  grid-column: 1 / -1;
+  color: var(--c-text-3);
+  font-size: 12px;
+}
+
+.live-risk {
+  margin-top: 6px;
+  padding-top: 16px;
+  border-top: 1px solid var(--c-border);
+}
+
+.live-risk-title {
+  margin: 0 0 8px;
+  color: var(--c-text-3);
+  font-size: 12px;
+  letter-spacing: 1px;
+}
+
+.live-risk-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+  color: var(--c-text-2);
+  font-size: 14px;
+}
+
+.live-risk-row strong {
+  color: var(--c-text);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.live-risk-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.live-empty {
+  margin: 0;
+  padding: 26px 20px;
+  text-align: center;
+  color: var(--c-text-3);
+  background: var(--c-subtle);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+}
+
+/* ── 区块标题层级：eyebrow + h2 ── */
+.section-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 20px;
+}
+
+.section-eyebrow {
+  margin: 0;
+  color: var(--c-primary);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 2px;
+}
+
+.section-head h2 {
+  margin: 0;
+  color: var(--c-text);
+  font-size: 22px;
+  font-weight: 700;
+}
+
+/* ── 第四层：趋势分析（水位 / 降雨并排） ── */
+.trend-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 28px;
+}
+
+.trend-grid .trend-section {
+  margin: 0;
+  padding: 22px 24px 16px;
+  background: var(--c-card);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--sh-sm);
+}
+
+.trend-grid .trend-section h3 {
+  margin: 0 0 12px;
+  color: var(--c-text);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.trend-grid .chart-frame {
+  padding: 12px 8px 4px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+/* ── 第五层：智能水情分析（报告式排版） ── */
+.ai-analysis-section {
+  padding: 30px 32px;
+  background: var(--c-card);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--sh-sm);
+}
+
+.ai-analysis-section .ai-header {
+  align-items: flex-start;
+}
+
+.ai-analysis-section .ai-header .section-head {
+  margin-bottom: 0;
+}
+
+.ai-analysis-section .ai-block {
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--c-border);
+  border-radius: 0;
+}
+
+.ai-analysis-section .ai-report-box {
+  background: var(--c-subtle);
+}
+
+/* ── 第六层：最新预警 ── */
+.latest-alert-list {
+  background: var(--c-card);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--sh-sm);
+  padding: 4px 26px;
+}
+
+.latest-alert-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 20px;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.latest-alert-row:last-child {
+  border-bottom: 0;
+}
+
+.latest-alert-main {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.latest-alert-station {
+  color: var(--c-text);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.latest-alert-metrics {
+  color: var(--c-text-2);
+  font-size: 13px;
+}
+
+.latest-alert-side {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  white-space: nowrap;
+}
+
+.latest-alert-time {
+  color: var(--c-text-3);
+  font-size: 12px;
+}
+
+.latest-alert-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.latest-alert-btn {
+  padding: 7px 14px;
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--r-md);
+  background: var(--c-card);
+  color: var(--c-text-2);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.latest-alert-btn:hover {
+  border-color: var(--c-primary);
+  color: var(--c-primary);
+}
+
+.latest-alert-btn.is-primary {
+  background: var(--c-primary);
+  border-color: var(--c-primary);
+  color: #ffffff;
+}
+
+.latest-alert-btn.is-primary:hover {
+  background: var(--c-primary-hover);
+  border-color: var(--c-primary-hover);
+  color: #ffffff;
+}
+
+/* ── 响应式：桌面并排 → 平板/手机纵向堆叠，无横向滚动 ── */
+@media (max-width: 1200px) {
+  .workbench {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .trend-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 980px) {
+  .monitor-panel {
+    padding: 0 24px 56px;
+  }
+
+  .hero {
+    padding: 32px 0 26px;
+  }
+
+  .hero-title {
+    font-size: 28px;
+  }
+
+  .top-nav-more {
+    padding-left: 0;
+    border-left: 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .monitor-panel {
+    padding: 0 16px 48px;
+  }
+
+  .workbench,
+  .trend-region,
+  .ai-analysis-section,
+  .latest-alerts,
+  .overall-status,
+  .overview-section,
+  .data-cards,
+  .warning-panel,
+  .warning-center,
+  .rainfall-section,
+  .history-analysis-section,
+  .comparison-section,
+  .report-section,
+  .alert-center {
+    margin-bottom: 40px;
+  }
+
+  .hero {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 18px;
+    padding: 26px 0 20px;
+  }
+
+  .hero-title {
+    font-size: 24px;
+  }
+
+  .hero-meta {
+    gap: 8px 20px;
+  }
+
+  .workbench-map .station-map {
+    height: 320px;
+  }
+
+  .workbench-map .map-section,
+  .live-summary,
+  .ai-analysis-section,
+  .trend-grid .trend-section {
+    padding: 18px 16px;
+  }
+
+  .live-metric dd {
+    font-size: 22px;
+  }
+
+  .latest-alert-list {
+    padding: 2px 16px;
+  }
+
+  .latest-alert-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .latest-alert-side {
+    gap: 10px;
+  }
+
+  .latest-alert-actions {
+    flex-wrap: wrap;
+  }
+}

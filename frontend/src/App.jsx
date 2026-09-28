@@ -1091,15 +1091,20 @@ function MonitorApp({ user, token, onLogout }) {
   const [activeSection, setActiveSection] = useState('overview')
 
   useEffect(() => {
-    const ids = ['overview', 'ai', 'map', 'current', 'rainfall', 'alerts', 'history', 'compare', 'report']
+    // Stage 25 Phase 1：导航高亮按 section 真实文档位置判定，
+    // 不再依赖数组顺序（数组顺序与视觉顺序不一致会导致高亮错位）。
+    const ids = ['overview', 'ai', 'map', 'current', 'trend', 'rainfall', 'alerts', 'history', 'compare', 'report']
     const onScroll = () => {
       const pos = window.scrollY + Math.min(window.innerHeight, 640) * 0.3
       let current = ''
+      let currentTop = -Infinity
       for (const id of ids) {
         const el = document.getElementById(id)
-        if (el) {
-          const top = el.getBoundingClientRect().top + window.scrollY
-          if (top <= pos) current = id
+        if (!el) continue
+        const top = el.getBoundingClientRect().top + window.scrollY
+        if (top <= pos && top > currentTop) {
+          currentTop = top
+          current = id
         }
       }
       setActiveSection(current || 'overview')
@@ -1557,6 +1562,42 @@ function MonitorApp({ user, token, onLogout }) {
 
   const activeWarnTotal = warningSummary && warningSummary.active != null ? warningSummary.active : latestWarnings.length
 
+  // Stage 25 Phase 1：首页工作台摘要（全部由现有状态派生，不新增接口、不写死数值）
+  const liveMetrics = useMemo(() => {
+    if (!overviewData.length) {
+      return { maxLevel: null, maxStation: '', totalRainfall: 0 }
+    }
+    let top = overviewData[0]
+    overviewData.forEach((item) => {
+      if (Number(item.water_level) > Number(top.water_level)) top = item
+    })
+    const totalRainfall = overviewData.reduce(
+      (sum, item) => sum + (Number(item.rainfall) || 0),
+      0
+    )
+    return {
+      maxLevel: Number(top.water_level),
+      maxStation: top.station_name || '',
+      totalRainfall,
+    }
+  }, [overviewData])
+
+  const stationTotal = overviewData.length || stations.length
+
+  const systemStatusText = errorMessage
+    ? '数据连接异常'
+    : isLoading ? '数据同步中' : '系统正常'
+
+  const systemStatusTone = errorMessage ? 'is-error' : isLoading ? 'is-syncing' : 'is-ok'
+
+  const lastUpdatedText =
+    waterData && waterData.updated_at ? formatUpdateTime(waterData.updated_at) : '等待数据'
+
+  const pendingAlertList = useMemo(
+    () => (alertItems || []).filter((a) => a.status !== 'resolved'),
+    [alertItems]
+  )
+
   const waterChartOption = {
     tooltip: { ...CHART_TOOLTIP, trigger: 'axis' },
     grid: { left: 52, right: 18, top: 32, bottom: 42 },
@@ -1658,33 +1699,64 @@ function MonitorApp({ user, token, onLogout }) {
       <section className="monitor-panel">
         <header className="page-header">
           <div className="header-top">
-            <div>
-              <p className="system-label">智慧水利 · 水情监测</p>
-              <h1>成都市智慧水利监测平台</h1>
-              <p className="subtitle">成都地区雨情水情综合监测与预警系统</p>
+            <div className="brand">
+              <span className="brand-mark" aria-hidden="true">清澜</span>
+              <div className="brand-text">
+                <p className="system-label">清澜 QingLan</p>
+                <p className="brand-sub">成都智慧水利监测平台</p>
+              </div>
             </div>
-            <div className="user-info">
-              <span className="user-role-badge">{user.role === 'admin' ? '管理员' : '用户'}</span>
-              <span className="user-name">{user.username}</span>
-              <button className="logout-btn" onClick={onLogout}>退出</button>
+            <div className="header-actions">
+              <span className={`system-status ${systemStatusTone}`}>
+                <i className="status-dot" aria-hidden="true" />
+                {systemStatusText}
+              </span>
+              <div className="user-info">
+                <span className="user-role-badge">{user.role === 'admin' ? '管理员' : '用户'}</span>
+                <span className="user-name">{user.username}</span>
+                {user.role === 'admin' && (
+                  <button type="button" className="header-entry-btn" onClick={() => setShowAdminPanel(true)}>管理员入口</button>
+                )}
+                <button className="logout-btn" onClick={onLogout}>退出</button>
+              </div>
             </div>
           </div>
+
+          <nav className="top-nav" aria-label="页面导航">
+            <div className="top-nav-main">
+              <button type="button" className={activeSection === 'overview' ? 'active' : ''} onClick={() => scrollToSection('overview')}>总览</button>
+              <button type="button" className={activeSection === 'current' ? 'active' : ''} onClick={() => scrollToSection('current')}>实时监测</button>
+              <button type="button" className={activeSection === 'trend' ? 'active' : ''} onClick={() => scrollToSection('trend')}>趋势分析</button>
+              <button type="button" className={activeSection === 'alerts' ? 'active' : ''} onClick={() => scrollToSection('alerts')}>预警中心</button>
+              <button type="button" className={activeSection === 'report' ? 'active' : ''} onClick={() => scrollToSection('report')}>数据报表</button>
+            </div>
+            <div className="top-nav-more">
+              <button type="button" className={activeSection === 'map' ? 'active' : ''} onClick={() => scrollToSection('map')}>区域地图</button>
+              <button type="button" className={activeSection === 'ai' ? 'active' : ''} onClick={() => scrollToSection('ai')}>智能分析</button>
+              <button type="button" className={activeSection === 'rainfall' ? 'active' : ''} onClick={() => scrollToSection('rainfall')}>雨情</button>
+              <button type="button" className={activeSection === 'history' ? 'active' : ''} onClick={() => scrollToSection('history')}>历史分析</button>
+              <button type="button" className={activeSection === 'compare' ? 'active' : ''} onClick={() => scrollToSection('compare')}>站点比较</button>
+              {user.role === 'admin' && (
+                <button type="button" className="top-nav-admin" onClick={() => setShowAdminPanel(true)}>管理后台</button>
+              )}
+            </div>
+          </nav>
         </header>
 
-        <nav className="top-nav" aria-label="页面导航">
-          <button type="button" className={activeSection === 'overview' ? 'active' : ''} onClick={() => scrollToSection('overview')}>总览</button>
-          <button type="button" className={activeSection === 'ai' ? 'active' : ''} onClick={() => scrollToSection('ai')}>AI 分析</button>
-          <button type="button" className={activeSection === 'map' ? 'active' : ''} onClick={() => scrollToSection('map')}>地图</button>
-          <button type="button" className={activeSection === 'current' ? 'active' : ''} onClick={() => scrollToSection('current')}>实时数据</button>
-          <button type="button" className={activeSection === 'rainfall' ? 'active' : ''} onClick={() => scrollToSection('rainfall')}>雨情</button>
-          <button type="button" className={activeSection === 'alerts' ? 'active' : ''} onClick={() => scrollToSection('alerts')}>预警</button>
-          <button type="button" className={activeSection === 'history' ? 'active' : ''} onClick={() => scrollToSection('history')}>历史分析</button>
-          <button type="button" className={activeSection === 'compare' ? 'active' : ''} onClick={() => scrollToSection('compare')}>站点比较</button>
-          <button type="button" className={activeSection === 'report' ? 'active' : ''} onClick={() => scrollToSection('report')}>数据报表</button>
-          {user.role === 'admin' && (
-            <button type="button" className="top-nav-admin" onClick={() => setShowAdminPanel(true)}>管理后台</button>
-          )}
-        </nav>
+        <section className="hero" aria-label="系统概览">
+          <div className="hero-main">
+            <h1 className="hero-title">成都智慧水利监测平台</h1>
+            <p className="hero-sub">实时掌握区域雨情、水情与风险变化</p>
+          </div>
+          <div className="hero-meta">
+            <span className={`hero-meta-item hero-status ${systemStatusTone}`}>
+              <i className="status-dot" aria-hidden="true" />
+              {systemStatusText}
+            </span>
+            <span className="hero-meta-item">监测站 <strong>{stationTotal}</strong> 个</span>
+            <span className="hero-meta-item">最后更新 <strong>{lastUpdatedText}</strong></span>
+          </div>
+        </section>
 
         <div className={`demo-banner ${isMockSource ? 'banner-mock' : 'banner-real'}`} aria-label="数据来源说明">
           <span className="demo-banner-label">数据来源：{sourceText(systemSource)}</span>
@@ -1723,41 +1795,95 @@ function MonitorApp({ user, token, onLogout }) {
           </section>
         )}
 
-        {overviewData.length > 0 && (
-          <section className="overview-section" aria-label="水文站总览">
-            <h2>各站点状态</h2>
-            <div className="overview-grid">
-              {overviewData.map((item) => {
-                const st = item.status || '正常'
-                return (
-                  <article
-                    key={item.station_id}
-                    className={`overview-card overview-${getStatusClass(st).replace('status-', '')}`}
-                    onClick={() => setSelectedStationId(item.station_id)}
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        setSelectedStationId(item.station_id)
-                      }
-                    }}
-                  >
-                    <h3>{item.station_name}</h3>
-                    <p className="overview-level">水位 {item.water_level.toFixed(2)} m</p>
-                    <p className="overview-rainfall">降雨 {(item.rainfall || 0).toFixed(1)} mm</p>
-                    <span className={`overview-status ${getStatusClass(st)}`}>
-                      {st}
-                    </span>
-                  </article>
-                )
-              })}
+        <section className="workbench" aria-label="核心监测工作台">
+          <div className="workbench-map">
+            <StationMap
+              stations={stations}
+              overviewData={overviewData}
+              selectedStationId={selectedStationId}
+              onStationSelect={setSelectedStationId}
+              latestWarnings={latestWarnings}
+            />
+          </div>
+
+          <aside className="live-summary" aria-label="实时水情摘要">
+            <div className="live-summary-head">
+              <h2>实时水情</h2>
+              <span className="live-summary-sub">
+                {sourceText(systemSource)} · {qualityText(systemQuality)}
+              </span>
+            </div>
+
+            <dl className="live-metrics">
+              <div className="live-metric">
+                <dt>监测站</dt>
+                <dd>{stationTotal}<small> 个</small></dd>
+                <span className="live-metric-note">区域在测站点数量</span>
+              </div>
+              <div className="live-metric">
+                <dt>最高水位</dt>
+                <dd>
+                  {liveMetrics.maxLevel == null ? '—' : liveMetrics.maxLevel.toFixed(2)}
+                  <small> m</small>
+                </dd>
+                <span className="live-metric-note">{liveMetrics.maxStation || '暂无数据'}</span>
+              </div>
+              <div className="live-metric">
+                <dt>区域降雨</dt>
+                <dd>{liveMetrics.totalRainfall.toFixed(1)}<small> mm</small></dd>
+                <span className="live-metric-note">各站实时累计合计</span>
+              </div>
+              <div className="live-metric">
+                <dt>待处理预警</dt>
+                <dd>{activeWarnTotal}<small> 条</small></dd>
+                <span className="live-metric-note">未解除预警数量</span>
+              </div>
+            </dl>
+
+            <div className="live-risk">
+              <p className="live-risk-title">当前风险分布</p>
+              {['正常', '注意', '警戒', '超警'].map((s) => (
+                <div key={s} className="live-risk-row">
+                  <span className="live-risk-name">
+                    <i className={`map-legend-dot dot-${STATUS_CLASSES[s].replace('status-', '')}`} />
+                    {s}
+                  </span>
+                  <strong>{statusCounts[s] || 0}</strong>
+                </div>
+              ))}
+            </div>
+          </aside>
+        </section>
+
+        {trendData.length > 0 && (
+          <section className="trend-region" id="trend" aria-label="趋势分析">
+            <div className="section-head">
+              <p className="section-eyebrow">趋势分析</p>
+              <h2>水位与降雨趋势</h2>
+            </div>
+            <div className="trend-grid">
+              <section className="trend-section" aria-label="水位变化趋势">
+                <h3>水位变化趋势</h3>
+                <div className="chart-frame">
+                  <ReactECharts option={waterChartOption} style={{ height: '320px' }} />
+                </div>
+              </section>
+              <section className="trend-section" aria-label="降雨量趋势">
+                <h3>降雨量趋势</h3>
+                <div className="chart-frame">
+                  <ReactECharts option={rainfallChartOption} style={{ height: '320px' }} />
+                </div>
+              </section>
             </div>
           </section>
         )}
 
         <section className="ai-analysis-section" id="ai" aria-label="AI 智能水情分析">
           <div className="ai-header">
-            <h2>AI 智能水情分析</h2>
+            <div className="section-head">
+              <p className="section-eyebrow">智能水情分析</p>
+              <h2>水情智能分析报告</h2>
+            </div>
             <span className={`ai-source-tag ${aiAnalysis && aiAnalysis.analysis_source === 'local_intelligence' ? 'is-local' : aiAnalysis && aiAnalysis.analysis_source === 'ai_model' ? (aiAnalysis.analysis_provider === 'doubao' ? 'is-doubao' : 'is-ai') : 'is-rule'}`}>
               分析来源：
               {aiAnalysis ? aiSourceLabel(aiAnalysis.analysis_source, aiAnalysis.analysis_provider) : '规则分析（暂未接入外部 AI 模型）'}
@@ -1915,13 +2041,102 @@ function MonitorApp({ user, token, onLogout }) {
           )}
         </section>
 
-        <StationMap
-          stations={stations}
-          overviewData={overviewData}
-          selectedStationId={selectedStationId}
-          onStationSelect={setSelectedStationId}
-          latestWarnings={latestWarnings}
-        />
+        <section className="latest-alerts" aria-label="最新预警">
+          <div className="section-head">
+            <p className="section-eyebrow">最新预警</p>
+            <h2>当前重要预警</h2>
+          </div>
+
+          {pendingAlertList.length === 0 ? (
+            <p className="live-empty">当前无待处理预警。</p>
+          ) : (
+            <div className="latest-alert-list">
+              {pendingAlertList.slice(0, 3).map((a) => (
+                <article key={a.id} className={`latest-alert-row alert-level-${a.warning_level}`}>
+                  <div className="latest-alert-main">
+                    <span className={`alert-level alert-level-${a.warning_level}`}>
+                      {ALERT_LEVEL_LABELS[a.warning_level] || a.warning_level}
+                    </span>
+                    <span className="latest-alert-station">{a.station_name}</span>
+                    <span className="latest-alert-metrics">
+                      当前水位 {Number(a.water_level).toFixed(2)} m / 警戒 {Number(a.warning_level_value).toFixed(2)} m
+                    </span>
+                  </div>
+                  <div className="latest-alert-side">
+                    <span className={`alert-status alert-status-${a.status}`}>
+                      {ALERT_STATUS_LABELS[a.status] || a.status}
+                    </span>
+                    <time className="latest-alert-time">
+                      {new Date(a.created_at).toLocaleString('zh-CN')}
+                    </time>
+                  </div>
+                  <div className="latest-alert-actions">
+                    <button
+                      type="button"
+                      className="latest-alert-btn"
+                      onClick={() => {
+                        setSelectedStationId(a.station_id)
+                        scrollToSection('current')
+                      }}
+                    >
+                      查看
+                    </button>
+                    {user.role === 'admin' && a.status !== 'acknowledged' && (
+                      <button
+                        type="button"
+                        className="latest-alert-btn"
+                        onClick={() => handleAlertAcknowledge(a.id)}
+                      >
+                        确认
+                      </button>
+                    )}
+                    {user.role === 'admin' && a.status !== 'resolved' && (
+                      <button
+                        type="button"
+                        className="latest-alert-btn is-primary"
+                        onClick={() => handleAlertResolve(a.id)}
+                      >
+                        解除
+                      </button>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {overviewData.length > 0 && (
+          <section className="overview-section" aria-label="水文站总览">
+            <h2>各站点状态</h2>
+            <div className="overview-grid">
+              {overviewData.map((item) => {
+                const st = item.status || '正常'
+                return (
+                  <article
+                    key={item.station_id}
+                    className={`overview-card overview-${getStatusClass(st).replace('status-', '')}`}
+                    onClick={() => setSelectedStationId(item.station_id)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        setSelectedStationId(item.station_id)
+                      }
+                    }}
+                  >
+                    <h3>{item.station_name}</h3>
+                    <p className="overview-level">水位 {item.water_level.toFixed(2)} m</p>
+                    <p className="overview-rainfall">降雨 {(item.rainfall || 0).toFixed(1)} mm</p>
+                    <span className={`overview-status ${getStatusClass(st)}`}>
+                      {st}
+                    </span>
+                  </article>
+                )
+              })}
+            </div>
+          </section>
+        )}
 
         {isLoading && <p className="notice loading">正在获取水情数据...</p>}
 
@@ -2138,24 +2353,6 @@ function MonitorApp({ user, token, onLogout }) {
           {isLoading ? '正在刷新...' : '刷新水情数据'}
         </button>
         <p className="refresh-tip">系统每 10 秒自动更新一次数据</p>
-
-        {trendData.length > 0 && (
-          <section className="trend-section" aria-label="水位变化趋势">
-            <h2>水位变化趋势</h2>
-            <div className="chart-frame">
-              <ReactECharts option={waterChartOption} style={{ height: '340px' }} />
-            </div>
-          </section>
-        )}
-
-        {trendData.length > 0 && (
-          <section className="trend-section" aria-label="降雨量趋势">
-            <h2>降雨量趋势</h2>
-            <div className="chart-frame">
-              <ReactECharts option={rainfallChartOption} style={{ height: '300px' }} />
-            </div>
-          </section>
-        )}
 
         {/* ── 第14阶段：历史数据分析与趋势预测 ── */}
         <section className="history-analysis-section" id="history" aria-label="历史分析">
